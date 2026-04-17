@@ -23,8 +23,8 @@ import type { AnalyzerConfig } from '../packages/core/src/types/game';
 
 const DEFAULT_INGESTION_CONFIG: AnalyzerConfig['ingestion'] = {
   maxGamesPerPlayer: 50,
-  maxGamesPerRun: 60,
-  sleepMsBetweenFetches: 150,
+  maxGamesPerRun: 2500,
+  sleepMsBetweenFetches: 2000,
   leaderboard: 'rm_1v1',
 };
 

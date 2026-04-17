@@ -85,4 +85,4 @@ Designed to port to Cloudflare Workers + D1 + Pages — same Hono routes, same S
 
 ## Rate limiting
 
-The ingestion script pauses 300ms between API calls and tracks failed fetches to avoid re-requesting games that aren't available. Once a game is stored, aoe4world is never contacted for it again.
+The ingestion script pauses 2000ms between API calls and tracks failed fetches to avoid re-requesting games that aren't available. Once a game is stored, aoe4world is never contacted for it again.
