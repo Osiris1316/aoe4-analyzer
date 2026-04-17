@@ -1,0 +1,19 @@
+{
+  "name": "aoe4-analyzer",
+  "private": true,
+  "scripts": {
+    "dev:api": "pnpm --filter api dev",
+    "dev:web": "pnpm --filter web dev",
+    "build": "pnpm --filter core build && pnpm --filter api build && pnpm --filter web build",
+    "migrate": "tsx scripts/migrate.ts",
+    "ingest": "tsx scripts/ingest.ts",
+    "extract": "tsx scripts/extract.ts",
+    "analyze": "tsx scripts/analyze.ts"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.6.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.0"
+  }
+}
