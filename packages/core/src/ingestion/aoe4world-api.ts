@@ -13,7 +13,7 @@ const BASE_API = 'https://aoe4world.com/api/v0';
 const BASE_SITE = 'https://aoe4world.com';
 
 const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36';
+  'aoe4-analyzer/1.0 (github.com/Osiris1316/aoe4-analyzer; battle-composition-tool)';
 
 /**
  * Fetch a player's recent 1v1 games.
@@ -33,6 +33,8 @@ export async function fetchRecentGames(
  * Fetch the full summary for a specific game.
  *
  * Uses the website URL pattern (no /api/v0/ prefix).
+ * This endpoint is internal/undocumented — not part of aoe4world's public API.
+ * Do NOT use this for bulk downloading without permission from the aoe4world devs.
  * The summary contains build orders, economy time series, and scores.
  */
 export async function fetchGameSummary(
