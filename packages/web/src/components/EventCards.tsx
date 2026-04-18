@@ -6,10 +6,10 @@
  * with optional game context row and "Jump to game" button.
  */
 
-import { formatTimestamp, formatUnitName, formatValue, formatCivName, severityLabel } from '../utils';
+import { formatTimestamp, formatUnitName, formatValue, formatCivName, severityLabel, computeValueBreakdown } from '../utils';
 import { getUnitCategory, CATEGORY_ORDER, type UnitCategory } from '../unit-categories';
 
-// ── Non-military units (excluded from ratio bar calculations) ──────────
+// ── Non-military units (excluded from calculations) ────────────────────
 
 const NON_MILITARY = new Set(['villager', 'scout', 'cattle', 'pilgrim', 'trader']);
 
@@ -22,8 +22,8 @@ export interface BattleData {
   end_sec: number;
   duration_sec: number;
   severity: string;
-  p0_units_lost: number | null;    // was: number
-  p1_units_lost: number | null;    // was: number
+  p0_units_lost: number | null;
+  p1_units_lost: number | null;
   p0_value_lost: number | null;
   p1_value_lost: number | null;
   compositions: Array<{
@@ -31,7 +31,7 @@ export interface BattleData {
     phase: string;
     composition: Record<string, number>;
     tier_state: Record<string, number> | null;
-    army_value: number | null;   // was: number
+    army_value: number | null;
   }>;
   losses: Array<{
     profile_id: number;
@@ -49,7 +49,6 @@ export interface BattleCardProps {
   p1ProfileId: number;
   isSelected: boolean;
   onClick: () => void;
-  /** If provided, shows a game context row (date, map, matchup) */
   gameContext?: {
     gameId: number;
     date: string;
@@ -57,16 +56,109 @@ export interface BattleCardProps {
     p0Civ: string;
     p1Civ: string;
   };
-  /** If provided, shows a "View in Game" button when expanded */
   onJumpToGame?: (gameId: number) => void;
-  /** If provided, renders composition ratio bars on each player's loss line */
   classifications?: Record<string, string>;
-  /** Unit costs for ratio bar value weighting */
   costs?: Record<string, number>;
 }
 
-// ── Composition Ratio Bar ──────────────────────────────────────────────
+// ── Generic Donut Chart ────────────────────────────────────────────────
 
+export interface DonutSegment {
+  value: number;
+  color: string;
+  label?: string;
+}
+
+/**
+ * SVG donut chart that splits two players from the 12 o'clock position.
+ *
+ * From 12 going clockwise: p1's segments in order.
+ * From 12 going counter-clockwise: p0's segments in order.
+ *
+ * This means the full clockwise rendering is:
+ *   p1 segments (in order) → p0 segments (reversed)
+ */
+export function DonutChart({ p0Segments, p1Segments, size = 64 }: {
+  p0Segments: DonutSegment[];
+  p1Segments: DonutSegment[];
+  size?: number;
+}) {
+  const p0 = p0Segments.filter(s => s.value > 0);
+  const p1 = p1Segments.filter(s => s.value > 0);
+
+  // Clockwise from 12: p1 in order, then p0 reversed
+  const allSegments = [...p1, ...[...p0].reverse()];
+
+  const grandTotal = allSegments.reduce((sum, s) => sum + s.value, 0);
+  if (grandTotal === 0) return null;
+
+  const cx = size / 2;
+  const cy = size / 2;
+  const outerR = size / 2 - 2;
+  const innerR = outerR * 0.55;
+  const gapDeg = 1.2;
+
+  function polarToXY(angleDeg: number, r: number) {
+    const rad = ((angleDeg - 90) * Math.PI) / 180;
+    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+  }
+
+  function arcPath(startDeg: number, sweepDeg: number): string {
+    const sweep = Math.min(sweepDeg, 359.9);
+    const endDeg = startDeg + sweep;
+    const largeArc = sweep > 180 ? 1 : 0;
+
+    const os = polarToXY(startDeg, outerR);
+    const oe = polarToXY(endDeg, outerR);
+    const ie = polarToXY(endDeg, innerR);
+    const is_ = polarToXY(startDeg, innerR);
+
+    return [
+      `M ${os.x} ${os.y}`,
+      `A ${outerR} ${outerR} 0 ${largeArc} 1 ${oe.x} ${oe.y}`,
+      `L ${ie.x} ${ie.y}`,
+      `A ${innerR} ${innerR} 0 ${largeArc} 0 ${is_.x} ${is_.y}`,
+      'Z',
+    ].join(' ');
+  }
+
+  const visibleSegments = allSegments.filter(s => s.value > 0);
+  const totalGapUsed = gapDeg * visibleSegments.length;
+
+  let cursor = 0;
+  const paths = visibleSegments.map((seg) => {
+    const rawDeg = (seg.value / grandTotal) * 360;
+    const adjusted = Math.max(rawDeg - totalGapUsed / visibleSegments.length, 0.5);
+    const d = arcPath(cursor + gapDeg / 2, adjusted);
+    cursor += rawDeg;
+    return { d, fill: seg.color, label: seg.label };
+  });
+
+  // Build tooltip
+  const tooltipText = visibleSegments
+    .map(s => {
+      const pct = Math.round((s.value / grandTotal) * 100);
+      return `${s.label ?? ''}: ${pct}%`;
+    })
+    .join(' · ');
+
+  return (
+    <svg
+      width={size} height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      className="value-donut"
+    >
+      <title>{tooltipText}</title>
+      {paths.map((p, i) => (
+        <path key={i} d={p.d} fill={p.fill} />
+      ))}
+    </svg>
+  );
+}
+
+// ── Segment Builders ───────────────────────────────────────────────────
+
+/** Category colors — used for both the category donut and any future category displays */
 const CATEGORY_COLORS: Record<string, string> = {
   melee_infantry: 'var(--cat-melee-infantry, #e06040)',
   ranged:         'var(--cat-ranged, #4090e0)',
@@ -78,7 +170,6 @@ const CATEGORY_COLORS: Record<string, string> = {
   other:          'var(--cat-other, #666)',
 };
 
-/** Category labels for the tooltip */
 const CATEGORY_LABELS: Record<string, string> = {
   melee_infantry: 'Melee',
   ranged: 'Ranged',
@@ -90,62 +181,61 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: 'Other',
 };
 
-/**
- * Compact horizontal stacked bar showing army composition by category.
- * Width of each segment = proportion of total army VALUE in that category.
- */
-export function CompositionRatioBar({ composition, classifications, costs }: {
-  composition: Record<string, number>;
-  classifications: Record<string, string>;
-  costs: Record<string, number>;
-}) {
+/** Build eco/mil donut segments for one player */
+export function buildEcoMilSegments(
+  breakdown: { economic: number; military: number },
+  player: 'p0' | 'p1',
+): DonutSegment[] {
+  return [
+    { value: breakdown.economic, color: `var(--donut-${player}-eco)`, label: `${player === 'p0' ? 'P0' : 'P1'} Eco` },
+    { value: breakdown.military, color: `var(--donut-${player}-mil)`, label: `${player === 'p0' ? 'P0' : 'P1'} Mil` },
+  ];
+}
+
+/** Build category donut segments for one player (military units only) */
+export function buildCategorySegments(
+  composition: Record<string, number>,
+  classifications: Record<string, string>,
+  costs: Record<string, number>,
+): DonutSegment[] {
   const catValues = new Map<string, number>();
-  let total = 0;
 
   for (const [lineKey, count] of Object.entries(composition)) {
     if (NON_MILITARY.has(lineKey)) continue;
     const cat = classifications[lineKey] ?? 'other';
+    if (cat === 'economy') continue; // eco shown in the other donut
     const value = count * (costs[lineKey] ?? 0);
-    catValues.set(cat, (catValues.get(cat) ?? 0) + value);
-    total += value;
+    if (value > 0) {
+      catValues.set(cat, (catValues.get(cat) ?? 0) + value);
+    }
   }
 
-  if (total === 0) return null;
+  // Return in CATEGORY_ORDER for consistent segment ordering
+  const segments: DonutSegment[] = [];
 
-  // Sort by CATEGORY_ORDER for consistent visual ordering
-  const segments = CATEGORY_ORDER
-    .filter(c => catValues.has(c.key))
-    .map(c => ({
-      category: c.key,
-      percentage: ((catValues.get(c.key) ?? 0) / total) * 100,
-    }));
+  for (const catDef of CATEGORY_ORDER) {
+    if (catDef.key === 'economy') continue;
+    const val = catValues.get(catDef.key);
+    if (val && val > 0) {
+      segments.push({
+        value: val,
+        color: CATEGORY_COLORS[catDef.key] ?? CATEGORY_COLORS.other,
+        label: CATEGORY_LABELS[catDef.key] ?? catDef.key,
+      });
+    }
+  }
 
   // Add 'other' if present
-  if (catValues.has('other')) {
+  const otherVal = catValues.get('other');
+  if (otherVal && otherVal > 0) {
     segments.push({
-      category: 'other',
-      percentage: ((catValues.get('other') ?? 0) / total) * 100,
+      value: otherVal,
+      color: CATEGORY_COLORS.other,
+      label: 'Other',
     });
   }
 
-  const tooltipText = segments
-    .map(s => `${CATEGORY_LABELS[s.category] ?? s.category}: ${Math.round(s.percentage)}%`)
-    .join(' · ');
-
-  return (
-    <div className="comp-ratio-bar" title={tooltipText}>
-      {segments.map((s) => (
-        <div
-          key={s.category}
-          className="comp-ratio-segment"
-          style={{
-            width: `${s.percentage}%`,
-            backgroundColor: CATEGORY_COLORS[s.category] ?? CATEGORY_COLORS.other,
-          }}
-        />
-      ))}
-    </div>
-  );
+  return segments;
 }
 
 // ── Battle Card ────────────────────────────────────────────────────────
@@ -158,13 +248,31 @@ export function BattleCard({
 }: BattleCardProps) {
   const severityClass = `severity-${battle.severity}`;
 
-  // Find pre-battle compositions for ratio bars
+  // Find pre-battle compositions
   const p0PreComp = battle.compositions.find(
     c => c.profile_id === p0ProfileId && c.phase === 'pre'
   );
   const p1PreComp = battle.compositions.find(
     c => c.profile_id === p1ProfileId && c.phase === 'pre'
   );
+
+  // Value breakdowns
+  const p0Breakdown = (classifications && costs && p0PreComp)
+    ? computeValueBreakdown(p0PreComp.composition, costs, classifications)
+    : null;
+  const p1Breakdown = (classifications && costs && p1PreComp)
+    ? computeValueBreakdown(p1PreComp.composition, costs, classifications)
+    : null;
+
+  // Category segments for the second donut
+  const p0CatSegs = (classifications && costs && p0PreComp)
+    ? buildCategorySegments(p0PreComp.composition, classifications, costs)
+    : [];
+  const p1CatSegs = (classifications && costs && p1PreComp)
+    ? buildCategorySegments(p1PreComp.composition, classifications, costs)
+    : [];
+
+  const hasBreakdown = p0Breakdown && p1Breakdown;
 
   return (
     <div
@@ -196,34 +304,78 @@ export function BattleCard({
         </span>
       </div>
 
-      <div className="ga-event-stats">
-        <div className="ga-loss p1">
-          <span className="ga-loss-label">{p0Name}</span>
-          <span className="mono">
-            {battle.p0_units_lost} units · {formatValue(battle.p0_value_lost ?? 0)} res
-          </span>
+      {/* ── Two-column layout with two donuts ────────────────── */}
+      {hasBreakdown ? (
+        <div className="ga-card-body">
+          {/* P0 column */}
+          <div className="ga-card-column">
+            <div className="ga-col-name p1">{p0Name}</div>
+            <div className="ga-col-total mono">{formatValue(p0Breakdown.total)} total</div>
+            <div className="ga-col-split">
+              <span className="ga-color-dot donut-p0-mil" />
+              <span className="mono">{formatValue(p0Breakdown.military)} mil</span>
+              <span className="ga-col-sep">·</span>
+              <span className="ga-color-dot donut-p0-eco" />
+              <span className="mono">{formatValue(p0Breakdown.economic)} eco</span>
+            </div>
+            <div className="ga-lost-header">Lost</div>
+            <div className="ga-lost-stat mono">{battle.p0_units_lost ?? 0} units</div>
+            <div className="ga-lost-stat mono">{formatValue(battle.p0_value_lost ?? 0)} res</div>
+          </div>
+
+          {/* Center: two donuts */}
+          <div className="ga-card-center">
+            <div className="ga-donut-stack">
+              <DonutChart
+                p0Segments={buildEcoMilSegments(p0Breakdown, 'p0')}
+                p1Segments={buildEcoMilSegments(p1Breakdown, 'p1')}
+                size={64}
+              />
+              <div className="ga-donut-label">Eco/Mil</div>
+            </div>
+            <div className="ga-donut-stack">
+              <DonutChart
+                p0Segments={p0CatSegs}
+                p1Segments={p1CatSegs}
+                size={64}
+              />
+              <div className="ga-donut-label">Comp</div>
+            </div>
+          </div>
+
+          {/* P1 column */}
+          <div className="ga-card-column right">
+            <div className="ga-col-name p2">{p1Name}</div>
+            <div className="ga-col-total mono">{formatValue(p1Breakdown.total)} total</div>
+            <div className="ga-col-split">
+              <span className="ga-color-dot donut-p1-mil" />
+              <span className="mono">{formatValue(p1Breakdown.military)} mil</span>
+              <span className="ga-col-sep">·</span>
+              <span className="ga-color-dot donut-p1-eco" />
+              <span className="mono">{formatValue(p1Breakdown.economic)} eco</span>
+            </div>
+            <div className="ga-lost-header">Lost</div>
+            <div className="ga-lost-stat mono">{battle.p1_units_lost ?? 0} units</div>
+            <div className="ga-lost-stat mono">{formatValue(battle.p1_value_lost ?? 0)} res</div>
+          </div>
         </div>
-        {classifications && costs && p0PreComp && (
-          <CompositionRatioBar
-            composition={p0PreComp.composition}
-            classifications={classifications}
-            costs={costs}
-          />
-        )}
-        <div className="ga-loss p2">
-          <span className="ga-loss-label">{p1Name}</span>
-          <span className="mono">
-            {battle.p1_units_lost} units · {formatValue(battle.p1_value_lost ?? 0)} res
-          </span>
+      ) : (
+        /* Fallback: original vertical layout when no classification data */
+        <div className="ga-event-stats">
+          <div className="ga-loss p1">
+            <span className="ga-loss-label">{p0Name}</span>
+            <span className="mono">
+              {battle.p0_units_lost} units · {formatValue(battle.p0_value_lost ?? 0)} res
+            </span>
+          </div>
+          <div className="ga-loss p2">
+            <span className="ga-loss-label">{p1Name}</span>
+            <span className="mono">
+              {battle.p1_units_lost} units · {formatValue(battle.p1_value_lost ?? 0)} res
+            </span>
+          </div>
         </div>
-        {classifications && costs && p1PreComp && (
-          <CompositionRatioBar
-            composition={p1PreComp.composition}
-            classifications={classifications}
-            costs={costs}
-          />
-        )}
-      </div>
+      )}
 
       {/* Expanded detail */}
       {isSelected && battle.compositions.length > 0 && (
@@ -290,7 +442,7 @@ function BattleDetail({ battle, p0Name, p1Name, p0ProfileId, p1ProfileId, onJump
         <button
           className="ga-jump-to-game"
           onClick={(e) => {
-            e.stopPropagation();  // Don't toggle the card
+            e.stopPropagation();
             onJumpToGame(gameId);
           }}
         >

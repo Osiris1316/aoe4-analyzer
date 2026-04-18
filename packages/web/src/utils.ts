@@ -2,6 +2,29 @@
  * Shared utility functions for display formatting.
  */
 
+export function computeValueBreakdown(
+  composition: Record<string, number>,
+  costs: Record<string, number>,
+  classifications: Record<string, string>,
+): { total: number; economic: number; military: number } {
+  let economic = 0;
+  let military = 0;
+
+  for (const [lineKey, count] of Object.entries(composition)) {
+    const unitCost = costs[lineKey] ?? 0;
+    const value = count * unitCost;
+    const category = classifications[lineKey] ?? 'unknown';
+
+    if (category === 'economy') {
+      economic += value;
+    } else {
+      military += value;
+    }
+  }
+
+  return { total: economic + military, economic, military };
+}
+
 /** Format seconds into "Xm Ys" — e.g. 760 → "12m 40s" */
 export function formatDuration(totalSec: number): string {
   const m = Math.floor(totalSec / 60);

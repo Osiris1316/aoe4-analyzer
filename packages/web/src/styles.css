@@ -990,3 +990,147 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   color: var(--text-primary);
   border-color: var(--text-muted);
 }
+
+/* ── Card Two-Column Layout + Dual Donuts ───────────────────────────────
+   REPLACE the previous card-styles block in your styles.css with this.
+   Delete the old .ga-value-breakdown, .ga-value-row, .ga-card-body etc.
+   and paste this instead.
+   ─────────────────────────────────────────────────────────────────────── */
+
+/* Donut segment colors */
+:root {
+  --donut-p0-eco: rgba(96, 165, 250, 0.3);
+  --donut-p0-mil: rgba(96, 165, 250, 0.85);
+  --donut-p1-eco: rgba(251, 146, 60, 0.3);
+  --donut-p1-mil: rgba(251, 146, 60, 0.85);
+}
+
+[data-theme="light"] {
+  --donut-p0-eco: rgba(37, 99, 235, 0.2);
+  --donut-p0-mil: rgba(37, 99, 235, 0.75);
+  --donut-p1-eco: rgba(234, 88, 12, 0.2);
+  --donut-p1-mil: rgba(234, 88, 12, 0.75);
+}
+
+/* Three-column body: player | donuts | player */
+.ga-card-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 0 2px;
+}
+
+/* Player info column */
+.ga-card-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.ga-card-column.right {
+  align-items: flex-end;
+  text-align: right;
+}
+
+/* Center column: holds the two donuts side by side */
+.ga-card-center {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+/* Donut + label stacked vertically */
+.ga-donut-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.ga-donut-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.value-donut {
+  display: block;
+}
+
+/* Player name inside card column */
+.ga-col-name {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.ga-col-name.p1 { color: var(--p1-color); }
+.ga-col-name.p2 { color: var(--p2-color); }
+
+/* Total value line */
+.ga-col-total {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+/* Mil / eco split line with color dots */
+.ga-col-split {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+.ga-card-column.right .ga-col-split {
+  justify-content: flex-end;
+}
+
+.ga-col-sep {
+  color: var(--text-muted);
+  margin: 0 1px;
+}
+
+/* Color indicator dots — match donut segment colors */
+.ga-color-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.ga-color-dot.donut-p0-mil { background-color: var(--donut-p0-mil); }
+.ga-color-dot.donut-p0-eco { background-color: var(--donut-p0-eco); }
+.ga-color-dot.donut-p1-mil { background-color: var(--donut-p1-mil); }
+.ga-color-dot.donut-p1-eco { background-color: var(--donut-p1-eco); }
+
+/* "Lost" label — muted red to signal damage */
+.ga-lost-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--severity-significant, #ef4444);
+  margin-top: 4px;
+  opacity: 0.8;
+}
+
+/* Loss stat lines below "Lost" */
+.ga-lost-stat {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Production stat in gap cards */
+.ga-prod-stat {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}

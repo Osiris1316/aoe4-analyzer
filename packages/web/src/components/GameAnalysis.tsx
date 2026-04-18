@@ -24,9 +24,13 @@ import {
 import {
   formatDuration, formatTimestamp, formatCivName,
   formatUnitName, formatValue, severityLabel,
+  computeValueBreakdown,
 } from '../utils';
 import { getUnitCategory, CATEGORY_ORDER, type UnitCategory } from '../unit-categories';
-import { BattleCard, CompositionDiff } from './EventCards';
+import {
+  BattleCard, CompositionDiff,
+  DonutChart, buildEcoMilSegments, buildCategorySegments,
+} from './EventCards';
 
 // ── Non-military units (excluded from army value) ──────────────────────
 
@@ -418,6 +422,15 @@ function PeriodCard({
     return comp;
   };
 
+  // Composition at gap start for value breakdown + category donut
+  const p0StartComp = getComposition(matrixData.p0.matrix, period.start_sec);
+  const p1StartComp = getComposition(matrixData.p1.matrix, period.start_sec);
+  const p0Breakdown = computeValueBreakdown(p0StartComp, matrixData.costs, matrixData.classifications);
+  const p1Breakdown = computeValueBreakdown(p1StartComp, matrixData.costs, matrixData.classifications);
+
+  const p0CatSegs = buildCategorySegments(p0StartComp, matrixData.classifications, matrixData.costs);
+  const p1CatSegs = buildCategorySegments(p1StartComp, matrixData.classifications, matrixData.costs);
+
   const computeLosses = (
     startComp: Record<string, number>, endComp: Record<string, number>,
     produced: Record<string, number> | null,
@@ -445,22 +458,62 @@ function PeriodCard({
           {formatDuration(Math.round(period.duration_sec))} gap
         </span>
       </div>
-      {(p0Count > 0 || p1Count > 0) && (
-        <div className="ga-event-stats">
+
+      {/* ── Two-column layout with two donuts ────────────────── */}
+      <div className="ga-card-body">
+        {/* P0 column */}
+        <div className="ga-card-column">
+          <div className="ga-col-name p1">{meta.p0_name}</div>
+          <div className="ga-col-total mono">{formatValue(p0Breakdown.total)} total</div>
+          <div className="ga-col-split">
+            <span className="ga-color-dot donut-p0-mil" />
+            <span className="mono">{formatValue(p0Breakdown.military)} mil</span>
+            <span className="ga-col-sep">·</span>
+            <span className="ga-color-dot donut-p0-eco" />
+            <span className="mono">{formatValue(p0Breakdown.economic)} eco</span>
+          </div>
           {p0Count > 0 && (
-            <div className="ga-production p1">
-              <span className="ga-loss-label">{meta.p0_name}</span>
-              <span className="mono">+{p0Count} units</span>
-            </div>
-          )}
-          {p1Count > 0 && (
-            <div className="ga-production p2">
-              <span className="ga-loss-label">{meta.p1_name}</span>
-              <span className="mono">+{p1Count} units</span>
-            </div>
+            <div className="ga-prod-stat mono">+{p0Count} produced</div>
           )}
         </div>
-      )}
+
+        {/* Center: two donuts */}
+        <div className="ga-card-center">
+          <div className="ga-donut-stack">
+            <DonutChart
+              p0Segments={buildEcoMilSegments(p0Breakdown, 'p0')}
+              p1Segments={buildEcoMilSegments(p1Breakdown, 'p1')}
+              size={64}
+            />
+            <div className="ga-donut-label">Eco/Mil</div>
+          </div>
+          <div className="ga-donut-stack">
+            <DonutChart
+              p0Segments={p0CatSegs}
+              p1Segments={p1CatSegs}
+              size={64}
+            />
+            <div className="ga-donut-label">Comp</div>
+          </div>
+        </div>
+
+        {/* P1 column */}
+        <div className="ga-card-column right">
+          <div className="ga-col-name p2">{meta.p1_name}</div>
+          <div className="ga-col-total mono">{formatValue(p1Breakdown.total)} total</div>
+          <div className="ga-col-split">
+            <span className="ga-color-dot donut-p1-mil" />
+            <span className="mono">{formatValue(p1Breakdown.military)} mil</span>
+            <span className="ga-col-sep">·</span>
+            <span className="ga-color-dot donut-p1-eco" />
+            <span className="mono">{formatValue(p1Breakdown.economic)} eco</span>
+          </div>
+          {p1Count > 0 && (
+            <div className="ga-prod-stat mono">+{p1Count} produced</div>
+          )}
+        </div>
+      </div>
+
       {isSelected && (
         <PeriodDetail
           period={period} meta={meta} matrixData={matrixData}
