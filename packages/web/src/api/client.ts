@@ -168,7 +168,14 @@ export interface PlayerBattlesResponse {
 
 // ── Fetch Helpers ──────────────────────────────────────────────────
 
-async function fetchJson<T>(url: string): Promise<T> {
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? '';
+
+function apiUrl(path: string): string {
+  return `${API_BASE_URL}${path}`;
+}
+
+async function fetchJson<T>(path: string): Promise<T> {
+  const url = apiUrl(path);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`API ${res.status}: ${url}`);
   return res.json();

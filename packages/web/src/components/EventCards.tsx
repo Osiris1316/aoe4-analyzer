@@ -456,7 +456,7 @@ export function BattleCard({
 
   return (
     <div
-      className={`ga-event-card battle ${severityClass} ${outcomeClass} ${isSelected ? 'selected' : ''}`}
+      className={`ga-event-card battle ${severityClass} ${isSelected ? 'selected' : ''} ${outcome ? `outcome-${outcome}` : ''}`}
       onClick={onClick}
     >
       {gameContext && (
