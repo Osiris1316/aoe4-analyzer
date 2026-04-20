@@ -993,8 +993,8 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 
 /* ── Card Layout, Donuts, Delta Columns, Outcome ───────────────────────
    REPLACE the previous card-styles block in styles.css with this entire
-   section. Covers: card body, donuts, grid-aligned delta columns with
-   column headers, delta chips, and battle outcome indicators.
+   section. This covers: two-column card body, donut charts, delta chips,
+   category-grouped aligned columns, and battle outcome indicators.
    ─────────────────────────────────────────────────────────────────────── */
 
 /* Donut segment colors */
@@ -1104,7 +1104,7 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 
 .ga-prod-stat { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 
-/* ── Composition Delta Columns (side-by-side) ─────────────────────── */
+/* ── Composition Delta Columns ────────────────────────────────────── */
 
 .ga-delta-columns {
   display: flex;
@@ -1120,7 +1120,7 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 .ga-delta-col-header {
   font-size: 13px;
   font-weight: 600;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -1128,7 +1128,9 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 .ga-delta-col.p1 .ga-delta-col-header { color: var(--p1-color); }
 .ga-delta-col.p2 .ga-delta-col-header { color: var(--p2-color); }
 
-.ga-delta-group { margin-bottom: 2px; }
+.ga-delta-group {
+  margin-bottom: 2px;
+}
 
 .ga-delta-group-divider {
   height: 1px;
@@ -1145,18 +1147,11 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   margin-bottom: 2px;
 }
 
-/* ── Delta Row: CSS Grid with fixed columns ───────────────────────── */
-/*
- * Columns:  Name (flex) | Start (32px) | Added (46px) | Lost (46px) | End (32px)
- *
- * Added/Lost are wider to accommodate ▲/▼ + up to 3 digits + chip padding.
- * Start/End hold plain numbers up to 3 digits.
- */
-
 .ga-delta-row {
   display: grid;
-  grid-template-columns: 1fr 32px 46px 46px 32px;
+  grid-template-columns: minmax(0, 1fr) 32px 56px 56px 32px;
   align-items: center;
+  column-gap: 6px;
   min-height: 20px;
   font-size: 12px;
 }
@@ -1165,56 +1160,27 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   visibility: hidden;
 }
 
-/* Column header row */
-.ga-delta-row.header {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  color: var(--text-muted);
-  min-height: 16px;
-  margin-bottom: 2px;
-}
-
 .ga-delta-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-primary);
+  font-size: 12px;
 }
 
-/* Individual grid cells */
-.ga-delta-cell {
+.ga-delta-values {
+  display: contents;
+}
+
+.ga-delta-start,
+.ga-delta-end {
   text-align: right;
+  font-size: 12px;
 }
 
-.ga-delta-cell.col-start {
-  color: var(--text-secondary);
-}
-
-.ga-delta-cell.col-added,
-.ga-delta-cell.col-lost {
-  text-align: center;
-}
-
-.ga-delta-cell.col-end {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-/* Header row cell styling */
-.ga-delta-row.header .ga-delta-cell {
-  font-weight: 400;
+.ga-delta-arrow {
   color: var(--text-muted);
-}
-
-.ga-delta-row.header .ga-delta-cell.col-start,
-.ga-delta-row.header .ga-delta-cell.col-end {
-  text-align: right;
-}
-
-.ga-delta-row.header .ga-delta-cell.col-added,
-.ga-delta-row.header .ga-delta-cell.col-lost {
-  text-align: center;
+  font-size: 10px;
 }
 
 /* Delta chips */
@@ -1223,7 +1189,6 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   padding: 0 3px;
   border-radius: 3px;
   cursor: default;
-  white-space: nowrap;
 }
 
 .ga-delta-chip.produced {
@@ -1272,78 +1237,4 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 .ga-outcome-badge.draw {
   color: var(--text-muted);
   background: rgba(163, 163, 163, 0.1);
-}
-
-/**
-* BattlesGallery — Player-level battles list
-*
-* Shows all battles across all games for a player, sorted by most recent
-* game first. Each battle is a self-contained expandable card with game
-* context, composition ratio bars, and a "View in Game" button.
-*/
-
-import { useState, useEffect } from 'react';
-import { api, type PlayerBattle, type PlayerBattlesResponse } from '../api/client';
-import { BattleCard } from './EventCards';
-
-interface Props {
-profileId: number;
-onJumpToGame: (gameId: number) => void;
-}
-
-export function BattlesGallery({ profileId, onJumpToGame }: Props) {
-const [data, setData] = useState<PlayerBattlesResponse | null>(null);
-const [loading, setLoading] = useState(true);
-const [selectedBattleId, setSelectedBattleId] = useState<number | null>(null);
-
-useEffect(() => {
-  setLoading(true);
-  setSelectedBattleId(null);
-  api.getPlayerBattles(profileId)
-    .then(setData)
-    .catch((err) => console.error('Failed to load battles:', err))
-    .finally(() => setLoading(false));
-}, [profileId]);
-
-if (loading) {
-  return <div className="loading-state">Loading battles…</div>;
-}
-
-if (!data || data.battles.length === 0) {
-  return <div className="empty-state">No battles found</div>;
-}
-
-return (
-  <div className="battles-gallery">
-    <div className="battles-summary text-muted" style={{ marginBottom: 12, fontSize: 13 }}>
-      {data.battles.length} battles across {new Set(data.battles.map(b => b.game_id)).size} games
-    </div>
-    <div className="ga-events-list">
-      {data.battles.map((b) => (
-        <BattleCard
-          key={b.battle_id}
-          battle={b}
-          p0Name={b.p0_name}
-          p1Name={b.p1_name}
-          p0ProfileId={b.p0_profile_id}
-          p1ProfileId={b.p1_profile_id}
-          isSelected={b.battle_id === selectedBattleId}
-          onClick={() => setSelectedBattleId(
-            b.battle_id === selectedBattleId ? null : b.battle_id
-          )}
-          gameContext={{
-            gameId: b.game_id,
-            date: b.game_started_at,
-            map: b.map,
-            p0Civ: b.p0_civ,
-            p1Civ: b.p1_civ,
-          }}
-          onJumpToGame={onJumpToGame}
-          classifications={data.classifications}
-          costs={data.costs}
-        />
-      ))}
-    </div>
-  </div>
-);
 }
