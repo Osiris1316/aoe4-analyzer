@@ -28,8 +28,9 @@ import {
 } from '../utils';
 import { getUnitCategory, CATEGORY_ORDER, type UnitCategory } from '../unit-categories';
 import {
-  BattleCard, CompositionDiff,
+  BattleCard,
   DonutChart, buildEcoMilSegments, buildCategorySegments,
+  CompositionDeltaColumns, computeGapDeltas,
 } from './EventCards';
 
 // ── Non-military units (excluded from army value) ──────────────────────
@@ -431,22 +432,6 @@ function PeriodCard({
   const p0CatSegs = buildCategorySegments(p0StartComp, matrixData.classifications, matrixData.costs);
   const p1CatSegs = buildCategorySegments(p1StartComp, matrixData.classifications, matrixData.costs);
 
-  const computeLosses = (
-    startComp: Record<string, number>, endComp: Record<string, number>,
-    produced: Record<string, number> | null,
-  ) => {
-    const losses: { lineKey: string; lost: number; valueLost: number }[] = [];
-    const allLines = new Set([...Object.keys(startComp), ...Object.keys(endComp)]);
-    for (const lineKey of allLines) {
-      const lost = (startComp[lineKey] ?? 0) + (produced?.[lineKey] ?? 0) - (endComp[lineKey] ?? 0);
-      if (lost > 0) {
-        losses.push({ lineKey, lost, valueLost: lost * (matrixData.costs[lineKey] ?? 0) });
-      }
-    }
-    losses.sort((a, b) => b.valueLost - a.valueLost);
-    return losses;
-  };
-
   return (
     <div className={`ga-event-card gap ${isSelected ? 'selected' : ''}`} onClick={onClick}>
       <div className="ga-event-header">
@@ -459,9 +444,7 @@ function PeriodCard({
         </span>
       </div>
 
-      {/* ── Two-column layout with two donuts ────────────────── */}
       <div className="ga-card-body">
-        {/* P0 column */}
         <div className="ga-card-column">
           <div className="ga-col-name p1">{meta.p0_name}</div>
           <div className="ga-col-total mono">{formatValue(p0Breakdown.total)} total</div>
@@ -477,7 +460,6 @@ function PeriodCard({
           )}
         </div>
 
-        {/* Center: two donuts */}
         <div className="ga-card-center">
           <div className="ga-donut-stack">
             <DonutChart
@@ -497,7 +479,6 @@ function PeriodCard({
           </div>
         </div>
 
-        {/* P1 column */}
         <div className="ga-card-column right">
           <div className="ga-col-name p2">{meta.p1_name}</div>
           <div className="ga-col-total mono">{formatValue(p1Breakdown.total)} total</div>
@@ -517,7 +498,7 @@ function PeriodCard({
       {isSelected && (
         <PeriodDetail
           period={period} meta={meta} matrixData={matrixData}
-          getComposition={getComposition} computeLosses={computeLosses}
+          getComposition={getComposition}
         />
       )}
     </div>
@@ -525,51 +506,28 @@ function PeriodCard({
 }
 
 function PeriodDetail({
-  period, meta, matrixData, getComposition, computeLosses,
+  period, meta, matrixData, getComposition,
 }: {
   period: TimelinePeriod; meta: GameMeta; matrixData: AliveMatrixResponse;
   getComposition: (matrix: Record<string, number[]>, timeSec: number) => Record<string, number>;
-  computeLosses: (start: Record<string, number>, end: Record<string, number>, produced: Record<string, number> | null) => { lineKey: string; lost: number; valueLost: number }[];
 }) {
   const p0Start = getComposition(matrixData.p0.matrix, period.start_sec);
   const p0End = getComposition(matrixData.p0.matrix, period.end_sec);
   const p1Start = getComposition(matrixData.p1.matrix, period.start_sec);
   const p1End = getComposition(matrixData.p1.matrix, period.end_sec);
-  const p0Losses = computeLosses(p0Start, p0End, period.p0_units_produced);
-  const p1Losses = computeLosses(p1Start, p1End, period.p1_units_produced);
-  const hasLosses = p0Losses.length > 0 || p1Losses.length > 0;
+
+  const p0Deltas = computeGapDeltas(p0Start, p0End, period.p0_units_produced);
+  const p1Deltas = computeGapDeltas(p1Start, p1End, period.p1_units_produced);
 
   return (
     <div className="ga-battle-detail">
-      <div className="ga-detail-columns">
-        <div className="ga-detail-col p1">
-          <div className="ga-detail-col-header">{meta.p0_name}</div>
-          <CompositionDiff pre={p0Start} post={p0End} />
-        </div>
-        <div className="ga-detail-col p2">
-          <div className="ga-detail-col-header">{meta.p1_name}</div>
-          <CompositionDiff pre={p1Start} post={p1End} />
-        </div>
-      </div>
-      {hasLosses && (
-        <div className="ga-loss-detail">
-          <div className="ga-loss-detail-header">Losses during gap</div>
-          {p0Losses.map((loss, i) => (
-            <div key={`p0-${i}`} className="ga-loss-row p1">
-              <span className="ga-loss-unit">{formatUnitName(loss.lineKey)}</span>
-              <span className="mono">×{loss.lost}</span>
-              <span className="mono text-muted">{formatValue(loss.valueLost)}</span>
-            </div>
-          ))}
-          {p1Losses.map((loss, i) => (
-            <div key={`p1-${i}`} className="ga-loss-row p2">
-              <span className="ga-loss-unit">{formatUnitName(loss.lineKey)}</span>
-              <span className="mono">×{loss.lost}</span>
-              <span className="mono text-muted">{formatValue(loss.valueLost)}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      <CompositionDeltaColumns
+        p0Deltas={p0Deltas}
+        p1Deltas={p1Deltas}
+        p0Name={meta.p0_name}
+        p1Name={meta.p1_name}
+        classifications={matrixData.classifications}
+      />
     </div>
   );
 }

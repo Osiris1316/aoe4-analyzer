@@ -991,10 +991,10 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   border-color: var(--text-muted);
 }
 
-/* ── Card Two-Column Layout + Dual Donuts ───────────────────────────────
-   REPLACE the previous card-styles block in your styles.css with this.
-   Delete the old .ga-value-breakdown, .ga-value-row, .ga-card-body etc.
-   and paste this instead.
+/* ── Card Layout, Donuts, Delta Columns, Outcome ───────────────────────
+   REPLACE the previous card-styles block in styles.css with this entire
+   section. This covers: two-column card body, donut charts, delta chips,
+   category-grouped aligned columns, and battle outcome indicators.
    ─────────────────────────────────────────────────────────────────────── */
 
 /* Donut segment colors */
@@ -1012,7 +1012,8 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   --donut-p1-mil: rgba(234, 88, 12, 0.75);
 }
 
-/* Three-column body: player | donuts | player */
+/* ── Card Body: player | donuts | player ──────────────────────────── */
+
 .ga-card-body {
   display: flex;
   align-items: flex-start;
@@ -1020,7 +1021,6 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   padding: 6px 0 2px;
 }
 
-/* Player info column */
 .ga-card-column {
   flex: 1;
   min-width: 0;
@@ -1035,7 +1035,6 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   text-align: right;
 }
 
-/* Center column: holds the two donuts side by side */
 .ga-card-center {
   flex: 0 0 auto;
   display: flex;
@@ -1045,7 +1044,6 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   padding-top: 2px;
 }
 
-/* Donut + label stacked vertically */
 .ga-donut-stack {
   display: flex;
   flex-direction: column;
@@ -1060,27 +1058,14 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   letter-spacing: 0.5px;
 }
 
-.value-donut {
-  display: block;
-}
+.value-donut { display: block; }
 
-/* Player name inside card column */
-.ga-col-name {
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: 2px;
-}
-
+.ga-col-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
 .ga-col-name.p1 { color: var(--p1-color); }
 .ga-col-name.p2 { color: var(--p2-color); }
 
-/* Total value line */
-.ga-col-total {
-  font-size: 13px;
-  color: var(--text-primary);
-}
+.ga-col-total { font-size: 13px; color: var(--text-primary); }
 
-/* Mil / eco split line with color dots */
 .ga-col-split {
   display: flex;
   align-items: center;
@@ -1090,16 +1075,10 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   flex-wrap: wrap;
 }
 
-.ga-card-column.right .ga-col-split {
-  justify-content: flex-end;
-}
+.ga-card-column.right .ga-col-split { justify-content: flex-end; }
 
-.ga-col-sep {
-  color: var(--text-muted);
-  margin: 0 1px;
-}
+.ga-col-sep { color: var(--text-muted); margin: 0 1px; }
 
-/* Color indicator dots — match donut segment colors */
 .ga-color-dot {
   display: inline-block;
   width: 7px;
@@ -1113,7 +1092,6 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 .ga-color-dot.donut-p1-mil { background-color: var(--donut-p1-mil); }
 .ga-color-dot.donut-p1-eco { background-color: var(--donut-p1-eco); }
 
-/* "Lost" label — muted red to signal damage */
 .ga-lost-header {
   font-size: 11px;
   font-weight: 600;
@@ -1122,17 +1100,154 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   opacity: 0.8;
 }
 
-/* Loss stat lines below "Lost" */
-.ga-lost-stat {
+.ga-lost-stat { font-size: 12px; color: var(--text-secondary); }
+
+.ga-prod-stat { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+/* ── Composition Delta Columns ────────────────────────────────────── */
+
+.ga-delta-columns {
+  display: flex;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.ga-delta-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.ga-delta-col-header {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ga-delta-col.p1 .ga-delta-col-header { color: var(--p1-color); }
+.ga-delta-col.p2 .ga-delta-col-header { color: var(--p2-color); }
+
+.ga-delta-group {
+  margin-bottom: 2px;
+}
+
+.ga-delta-group-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px 0;
+  opacity: 0.5;
+}
+
+.ga-delta-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.ga-delta-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
+  min-height: 20px;
+}
+
+.ga-delta-row.spacer {
+  visibility: hidden;
+}
+
+.ga-delta-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.ga-delta-values {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.ga-delta-start {
+  min-width: 16px;
+  text-align: right;
   color: var(--text-secondary);
 }
 
-/* Production stat in gap cards */
-.ga-prod-stat {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 4px;
+.ga-delta-end {
+  min-width: 16px;
+  text-align: right;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.ga-delta-arrow {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* Delta chips */
+.ga-delta-chip {
+  font-size: 11px;
+  padding: 0 3px;
+  border-radius: 3px;
+  cursor: default;
+}
+
+.ga-delta-chip.produced {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.ga-delta-chip.lost {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* ── Battle Outcome Indicator ─────────────────────────────────────── */
+
+.ga-event-card.battle.outcome-win {
+  border-left: 3px solid rgba(34, 197, 94, 0.6);
+}
+
+.ga-event-card.battle.outcome-loss {
+  border-left: 3px solid rgba(239, 68, 68, 0.5);
+}
+
+.ga-event-card.battle.outcome-draw {
+  border-left: 3px solid rgba(163, 163, 163, 0.4);
+}
+
+.ga-outcome-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: auto;
+  letter-spacing: 0.3px;
+}
+
+.ga-outcome-badge.win {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.ga-outcome-badge.loss {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.ga-outcome-badge.draw {
+  color: var(--text-muted);
+  background: rgba(163, 163, 163, 0.1);
 }
 
 /**

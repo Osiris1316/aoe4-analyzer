@@ -59,7 +59,6 @@ export interface BattleCardProps {
   onJumpToGame?: (gameId: number) => void;
   classifications?: Record<string, string>;
   costs?: Record<string, number>;
-  /** Battle outcome from p0's perspective. Shows a visual win/loss indicator. */
   outcome?: 'win' | 'loss' | 'draw';
 }
 
@@ -71,14 +70,6 @@ export interface DonutSegment {
   label?: string;
 }
 
-/**
- * SVG donut chart that splits two players from the 12 o'clock position.
- *
- * From 12 going clockwise: p1's segments in order.
- * From 12 going counter-clockwise: p0's segments in order.
- *
- * Full clockwise rendering: p1 segments (in order) → p0 segments (reversed)
- */
 export function DonutChart({ p0Segments, p1Segments, size = 64 }: {
   p0Segments: DonutSegment[];
   p1Segments: DonutSegment[];
@@ -86,8 +77,6 @@ export function DonutChart({ p0Segments, p1Segments, size = 64 }: {
 }) {
   const p0 = p0Segments.filter(s => s.value > 0);
   const p1 = p1Segments.filter(s => s.value > 0);
-
-  // Clockwise from 12: p1 in order, then p0 reversed
   const allSegments = [...p1, ...[...p0].reverse()];
 
   const grandTotal = allSegments.reduce((sum, s) => sum + s.value, 0);
@@ -108,12 +97,10 @@ export function DonutChart({ p0Segments, p1Segments, size = 64 }: {
     const sweep = Math.min(sweepDeg, 359.9);
     const endDeg = startDeg + sweep;
     const largeArc = sweep > 180 ? 1 : 0;
-
     const os = polarToXY(startDeg, outerR);
     const oe = polarToXY(endDeg, outerR);
     const ie = polarToXY(endDeg, innerR);
     const is_ = polarToXY(startDeg, innerR);
-
     return [
       `M ${os.x} ${os.y}`,
       `A ${outerR} ${outerR} 0 ${largeArc} 1 ${oe.x} ${oe.y}`,
@@ -143,11 +130,7 @@ export function DonutChart({ p0Segments, p1Segments, size = 64 }: {
     .join(' · ');
 
   return (
-    <svg
-      width={size} height={size}
-      viewBox={`0 0 ${size} ${size}`}
-      className="value-donut"
-    >
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="value-donut">
       <title>{tooltipText}</title>
       {paths.map((p, i) => (
         <path key={i} d={p.d} fill={p.fill} />
@@ -180,7 +163,6 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: 'Other',
 };
 
-/** Build eco/mil donut segments for one player */
 export function buildEcoMilSegments(
   breakdown: { economic: number; military: number },
   player: 'p0' | 'p1',
@@ -191,7 +173,6 @@ export function buildEcoMilSegments(
   ];
 }
 
-/** Build category donut segments for one player (military units only) */
 export function buildCategorySegments(
   composition: Record<string, number>,
   classifications: Record<string, string>,
@@ -210,7 +191,6 @@ export function buildCategorySegments(
   }
 
   const segments: DonutSegment[] = [];
-
   for (const catDef of CATEGORY_ORDER) {
     if (catDef.key === 'economy') continue;
     const val = catValues.get(catDef.key);
@@ -222,17 +202,230 @@ export function buildCategorySegments(
       });
     }
   }
-
   const otherVal = catValues.get('other');
   if (otherVal && otherVal > 0) {
-    segments.push({
-      value: otherVal,
-      color: CATEGORY_COLORS.other,
-      label: 'Other',
-    });
+    segments.push({ value: otherVal, color: CATEGORY_COLORS.other, label: 'Other' });
+  }
+  return segments;
+}
+
+// ── Unit Line Delta ────────────────────────────────────────────────────
+
+export interface UnitLineDelta {
+  lineKey: string;
+  start: number;
+  produced: number;
+  lost: number;
+  end: number;
+}
+
+/**
+ * Compute per-line deltas for a battle, for one player.
+ *
+ * produced = max(0, end - start + lost)
+ * This captures reinforcements trained during extended battles.
+ */
+export function computeBattleDeltas(
+  pre: Record<string, number> | undefined,
+  post: Record<string, number> | undefined,
+  losses: Array<{ line_key: string; units_lost: number }>,
+): UnitLineDelta[] {
+  if (!pre) return [];
+
+  const lossMap = new Map<string, number>();
+  for (const loss of losses) {
+    lossMap.set(loss.line_key, (lossMap.get(loss.line_key) ?? 0) + loss.units_lost);
   }
 
-  return segments;
+  const allLines = new Set([
+    ...Object.keys(pre ?? {}),
+    ...Object.keys(post ?? {}),
+    ...lossMap.keys(),
+  ]);
+
+  const deltas: UnitLineDelta[] = [];
+  for (const lineKey of allLines) {
+    const start = pre?.[lineKey] ?? 0;
+    const end = post?.[lineKey] ?? 0;
+    const lost = lossMap.get(lineKey) ?? 0;
+    const produced = Math.max(0, end - start + lost);
+
+    if (start > 0 || end > 0 || lost > 0 || produced > 0) {
+      deltas.push({ lineKey, start, produced, lost, end });
+    }
+  }
+
+  return deltas;
+}
+
+/**
+ * Compute per-line deltas for a gap period, for one player.
+ *
+ * lost = max(0, start + produced - end)
+ */
+export function computeGapDeltas(
+  startComp: Record<string, number>,
+  endComp: Record<string, number>,
+  produced: Record<string, number> | null,
+): UnitLineDelta[] {
+  const allLines = new Set([
+    ...Object.keys(startComp),
+    ...Object.keys(endComp),
+    ...Object.keys(produced ?? {}),
+  ]);
+
+  const deltas: UnitLineDelta[] = [];
+  for (const lineKey of allLines) {
+    const start = startComp[lineKey] ?? 0;
+    const end = endComp[lineKey] ?? 0;
+    const prod = produced?.[lineKey] ?? 0;
+    const lost = Math.max(0, start + prod - end);
+
+    if (start > 0 || end > 0 || lost > 0 || prod > 0) {
+      deltas.push({ lineKey, start, produced: prod, lost, end });
+    }
+  }
+
+  return deltas;
+}
+
+// ── Composition Delta Columns (category-grouped, aligned) ──────────────
+
+/**
+ * Side-by-side columns showing unit deltas for both players,
+ * grouped by unit category with aligned row heights.
+ *
+ * Each row: UnitName  start  ▲produced  ▼lost  → end
+ */
+export function CompositionDeltaColumns({
+  p0Deltas, p1Deltas,
+  p0Name, p1Name,
+  classifications,
+}: {
+  p0Deltas: UnitLineDelta[];
+  p1Deltas: UnitLineDelta[];
+  p0Name: string;
+  p1Name: string;
+  classifications: Record<string, string>;
+}) {
+  // Group deltas by category
+  const groupByCategory = (deltas: UnitLineDelta[]) => {
+    const groups = new Map<string, UnitLineDelta[]>();
+    for (const d of deltas) {
+      const cat = getUnitCategory(d.lineKey, classifications);
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat)!.push(d);
+    }
+    // Sort within each group by start count descending
+    for (const arr of groups.values()) {
+      arr.sort((a, b) => b.start - a.start);
+    }
+    return groups;
+  };
+
+  const p0Groups = groupByCategory(p0Deltas);
+  const p1Groups = groupByCategory(p1Deltas);
+
+  // Find all categories present in either player
+  const allCats = new Set([...p0Groups.keys(), ...p1Groups.keys()]);
+
+  // Filter to CATEGORY_ORDER for consistent ordering
+  const categoriesToRender = CATEGORY_ORDER.filter(c => allCats.has(c.key));
+  // Add 'other' if present
+  if (allCats.has('other') && !categoriesToRender.find(c => c.key === 'other')) {
+    categoriesToRender.push({ key: 'other' as UnitCategory, label: 'Other' });
+  }
+
+  // Compute max row count per category for alignment
+  const maxRows = new Map<string, number>();
+  for (const cat of categoriesToRender) {
+    const p0Count = p0Groups.get(cat.key)?.length ?? 0;
+    const p1Count = p1Groups.get(cat.key)?.length ?? 0;
+    maxRows.set(cat.key, Math.max(p0Count, p1Count));
+  }
+
+  if (categoriesToRender.length === 0) {
+    return <div className="text-muted" style={{ fontSize: 12 }}>No unit data</div>;
+  }
+
+  return (
+    <div className="ga-delta-columns">
+      <DeltaColumn
+        name={p0Name}
+        playerClass="p1"
+        groups={p0Groups}
+        categories={categoriesToRender}
+        maxRows={maxRows}
+      />
+      <DeltaColumn
+        name={p1Name}
+        playerClass="p2"
+        groups={p1Groups}
+        categories={categoriesToRender}
+        maxRows={maxRows}
+      />
+    </div>
+  );
+}
+
+function DeltaColumn({
+  name, playerClass, groups, categories, maxRows,
+}: {
+  name: string;
+  playerClass: string;
+  groups: Map<string, UnitLineDelta[]>;
+  categories: Array<{ key: string; label: string }>;
+  maxRows: Map<string, number>;
+}) {
+  return (
+    <div className={`ga-delta-col ${playerClass}`}>
+      <div className="ga-delta-col-header">{name}</div>
+      {categories.map((cat, gi) => {
+        const deltas = groups.get(cat.key) ?? [];
+        const max = maxRows.get(cat.key) ?? 0;
+        const spacerCount = max - deltas.length;
+
+        return (
+          <div key={cat.key} className="ga-delta-group">
+            {gi > 0 && <div className="ga-delta-group-divider" />}
+            <div className="ga-delta-group-label">{cat.label}</div>
+            {deltas.map((d) => (
+              <DeltaRow key={d.lineKey} delta={d} />
+            ))}
+            {Array.from({ length: spacerCount }, (_, i) => (
+              <div key={`spacer-${i}`} className="ga-delta-row spacer"><span>&nbsp;</span></div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DeltaRow({ delta }: { delta: UnitLineDelta }) {
+  const { lineKey, start, produced, lost, end } = delta;
+  const hasActivity = produced > 0 || lost > 0;
+
+  return (
+    <div className="ga-delta-row">
+      <span className="ga-delta-name">{formatUnitName(lineKey)}</span>
+      <span className="ga-delta-values mono">
+        <span className="ga-delta-start">{start}</span>
+        {produced > 0 && (
+          <span className="ga-delta-chip produced" title={`${produced} produced`}>
+            ▲{produced}
+          </span>
+        )}
+        {lost > 0 && (
+          <span className="ga-delta-chip lost" title={`${lost} lost`}>
+            ▼{lost}
+          </span>
+        )}
+        {hasActivity && <span className="ga-delta-arrow">→</span>}
+        {hasActivity && <span className="ga-delta-end">{end}</span>}
+      </span>
+    </div>
+  );
 }
 
 // ── Battle Card ────────────────────────────────────────────────────────
@@ -247,7 +440,6 @@ export function BattleCard({
   const severityClass = `severity-${battle.severity}`;
   const outcomeClass = outcome ? `outcome-${outcome}` : '';
 
-  // Find pre-battle compositions
   const p0PreComp = battle.compositions.find(
     c => c.profile_id === p0ProfileId && c.phase === 'pre'
   );
@@ -255,7 +447,6 @@ export function BattleCard({
     c => c.profile_id === p1ProfileId && c.phase === 'pre'
   );
 
-  // Value breakdowns
   const p0Breakdown = (classifications && costs && p0PreComp)
     ? computeValueBreakdown(p0PreComp.composition, costs, classifications)
     : null;
@@ -263,7 +454,6 @@ export function BattleCard({
     ? computeValueBreakdown(p1PreComp.composition, costs, classifications)
     : null;
 
-  // Category segments for second donut
   const p0CatSegs = (classifications && costs && p0PreComp)
     ? buildCategorySegments(p0PreComp.composition, classifications, costs)
     : [];
@@ -278,7 +468,6 @@ export function BattleCard({
       className={`ga-event-card battle ${severityClass} ${outcomeClass} ${isSelected ? 'selected' : ''}`}
       onClick={onClick}
     >
-      {/* Game context row — only in battles gallery */}
       {gameContext && (
         <div className="ga-event-game-context">
           <span className="ga-event-date mono">
@@ -308,10 +497,8 @@ export function BattleCard({
         )}
       </div>
 
-      {/* ── Two-column layout with two donuts ────────────────── */}
       {hasBreakdown ? (
         <div className="ga-card-body">
-          {/* P0 column */}
           <div className="ga-card-column">
             <div className="ga-col-name p1">{p0Name}</div>
             <div className="ga-col-total mono">{formatValue(p0Breakdown.total)} total</div>
@@ -327,7 +514,6 @@ export function BattleCard({
             <div className="ga-lost-stat mono">{formatValue(battle.p0_value_lost ?? 0)} res</div>
           </div>
 
-          {/* Center: two donuts */}
           <div className="ga-card-center">
             <div className="ga-donut-stack">
               <DonutChart
@@ -347,7 +533,6 @@ export function BattleCard({
             </div>
           </div>
 
-          {/* P1 column */}
           <div className="ga-card-column right">
             <div className="ga-col-name p2">{p1Name}</div>
             <div className="ga-col-total mono">{formatValue(p1Breakdown.total)} total</div>
@@ -380,7 +565,7 @@ export function BattleCard({
         </div>
       )}
 
-      {/* Expanded detail */}
+      {/* Expanded detail — now uses delta columns with merged losses */}
       {isSelected && battle.compositions.length > 0 && (
         <BattleDetail
           battle={battle}
@@ -390,6 +575,7 @@ export function BattleCard({
           p1ProfileId={p1ProfileId}
           onJumpToGame={onJumpToGame}
           gameId={gameContext?.gameId}
+          classifications={classifications}
         />
       )}
     </div>
@@ -398,7 +584,7 @@ export function BattleCard({
 
 // ── Battle Detail (expanded) ───────────────────────────────────────────
 
-function BattleDetail({ battle, p0Name, p1Name, p0ProfileId, p1ProfileId, onJumpToGame, gameId }: {
+function BattleDetail({ battle, p0Name, p1Name, p0ProfileId, p1ProfileId, onJumpToGame, gameId, classifications }: {
   battle: BattleData;
   p0Name: string;
   p1Name: string;
@@ -406,12 +592,44 @@ function BattleDetail({ battle, p0Name, p1Name, p0ProfileId, p1ProfileId, onJump
   p1ProfileId: number;
   onJumpToGame?: (gameId: number) => void;
   gameId?: number;
+  classifications?: Record<string, string>;
 }) {
   const p0Pre = battle.compositions.find(c => c.profile_id === p0ProfileId && c.phase === 'pre');
   const p0Post = battle.compositions.find(c => c.profile_id === p0ProfileId && c.phase === 'post');
   const p1Pre = battle.compositions.find(c => c.profile_id === p1ProfileId && c.phase === 'pre');
   const p1Post = battle.compositions.find(c => c.profile_id === p1ProfileId && c.phase === 'post');
 
+  // Split losses by player
+  const p0Losses = battle.losses.filter(l => l.profile_id === p0ProfileId);
+  const p1Losses = battle.losses.filter(l => l.profile_id === p1ProfileId);
+
+  if (classifications) {
+    // Use the new delta columns with merged losses
+    const p0Deltas = computeBattleDeltas(p0Pre?.composition, p0Post?.composition, p0Losses);
+    const p1Deltas = computeBattleDeltas(p1Pre?.composition, p1Post?.composition, p1Losses);
+
+    return (
+      <div className="ga-battle-detail">
+        <CompositionDeltaColumns
+          p0Deltas={p0Deltas}
+          p1Deltas={p1Deltas}
+          p0Name={p0Name}
+          p1Name={p1Name}
+          classifications={classifications}
+        />
+        {onJumpToGame && gameId && (
+          <button
+            className="ga-jump-to-game"
+            onClick={(e) => { e.stopPropagation(); onJumpToGame(gameId); }}
+          >
+            View in Game →
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // Fallback: old layout when no classifications available
   return (
     <div className="ga-battle-detail">
       <div className="ga-detail-columns">
@@ -424,15 +642,11 @@ function BattleDetail({ battle, p0Name, p1Name, p0ProfileId, p1ProfileId, onJump
           <CompositionDiff pre={p1Pre?.composition} post={p1Post?.composition} />
         </div>
       </div>
-
       {battle.losses.length > 0 && (
         <div className="ga-loss-detail">
           <div className="ga-loss-detail-header">Losses</div>
           {battle.losses.map((loss, i) => (
-            <div
-              key={i}
-              className={`ga-loss-row ${loss.profile_id === p0ProfileId ? 'p1' : 'p2'}`}
-            >
+            <div key={i} className={`ga-loss-row ${loss.profile_id === p0ProfileId ? 'p1' : 'p2'}`}>
               <span className="ga-loss-unit">{formatUnitName(loss.line_key)}</span>
               <span className="mono">×{loss.units_lost}</span>
               <span className="mono text-muted">{formatValue(loss.value_lost)}</span>
@@ -440,15 +654,8 @@ function BattleDetail({ battle, p0Name, p1Name, p0ProfileId, p1ProfileId, onJump
           ))}
         </div>
       )}
-
       {onJumpToGame && gameId && (
-        <button
-          className="ga-jump-to-game"
-          onClick={(e) => {
-            e.stopPropagation();
-            onJumpToGame(gameId);
-          }}
-        >
+        <button className="ga-jump-to-game" onClick={(e) => { e.stopPropagation(); onJumpToGame(gameId); }}>
           View in Game →
         </button>
       )}
@@ -456,7 +663,7 @@ function BattleDetail({ battle, p0Name, p1Name, p0ProfileId, p1ProfileId, onJump
   );
 }
 
-// ── Composition Diff (pre → post) ──────────────────────────────────────
+// ── Composition Diff (legacy, kept for backward compatibility) ─────────
 
 export function CompositionDiff({
   pre, post,
