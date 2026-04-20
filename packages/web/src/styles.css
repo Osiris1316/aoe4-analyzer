@@ -993,8 +993,8 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 
 /* ── Card Layout, Donuts, Delta Columns, Outcome ───────────────────────
    REPLACE the previous card-styles block in styles.css with this entire
-   section. This covers: two-column card body, donut charts, delta chips,
-   category-grouped aligned columns, and battle outcome indicators.
+   section. Covers: card body, donuts, grid-aligned delta columns with
+   column headers, delta chips, and battle outcome indicators.
    ─────────────────────────────────────────────────────────────────────── */
 
 /* Donut segment colors */
@@ -1104,7 +1104,7 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 
 .ga-prod-stat { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 
-/* ── Composition Delta Columns ────────────────────────────────────── */
+/* ── Composition Delta Columns (side-by-side) ─────────────────────── */
 
 .ga-delta-columns {
   display: flex;
@@ -1120,7 +1120,7 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 .ga-delta-col-header {
   font-size: 13px;
   font-weight: 600;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -1128,9 +1128,7 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 .ga-delta-col.p1 .ga-delta-col-header { color: var(--p1-color); }
 .ga-delta-col.p2 .ga-delta-col-header { color: var(--p2-color); }
 
-.ga-delta-group {
-  margin-bottom: 2px;
-}
+.ga-delta-group { margin-bottom: 2px; }
 
 .ga-delta-group-divider {
   height: 1px;
@@ -1147,51 +1145,76 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   margin-bottom: 2px;
 }
 
+/* ── Delta Row: CSS Grid with fixed columns ───────────────────────── */
+/*
+ * Columns:  Name (flex) | Start (32px) | Added (46px) | Lost (46px) | End (32px)
+ *
+ * Added/Lost are wider to accommodate ▲/▼ + up to 3 digits + chip padding.
+ * Start/End hold plain numbers up to 3 digits.
+ */
+
 .ga-delta-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 32px 46px 46px 32px;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
   min-height: 20px;
+  font-size: 12px;
 }
 
 .ga-delta-row.spacer {
   visibility: hidden;
 }
 
+/* Column header row */
+.ga-delta-row.header {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+  min-height: 16px;
+  margin-bottom: 2px;
+}
+
 .ga-delta-name {
-  flex: 1;
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
-  font-size: 12px;
 }
 
-.ga-delta-values {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
-}
-
-.ga-delta-start {
-  min-width: 16px;
+/* Individual grid cells */
+.ga-delta-cell {
   text-align: right;
+}
+
+.ga-delta-cell.col-start {
   color: var(--text-secondary);
 }
 
-.ga-delta-end {
-  min-width: 16px;
-  text-align: right;
+.ga-delta-cell.col-added,
+.ga-delta-cell.col-lost {
+  text-align: center;
+}
+
+.ga-delta-cell.col-end {
   color: var(--text-primary);
   font-weight: 600;
 }
 
-.ga-delta-arrow {
+/* Header row cell styling */
+.ga-delta-row.header .ga-delta-cell {
+  font-weight: 400;
   color: var(--text-muted);
-  font-size: 10px;
+}
+
+.ga-delta-row.header .ga-delta-cell.col-start,
+.ga-delta-row.header .ga-delta-cell.col-end {
+  text-align: right;
+}
+
+.ga-delta-row.header .ga-delta-cell.col-added,
+.ga-delta-row.header .ga-delta-cell.col-lost {
+  text-align: center;
 }
 
 /* Delta chips */
@@ -1200,6 +1223,7 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   padding: 0 3px;
   border-radius: 3px;
   cursor: default;
+  white-space: nowrap;
 }
 
 .ga-delta-chip.produced {
