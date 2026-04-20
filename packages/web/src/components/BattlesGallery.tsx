@@ -4,6 +4,9 @@
  * Shows all battles across all games for a player, sorted by most recent
  * game first. Each battle is a self-contained expandable card with game
  * context, composition ratio bars, and a "View in Game" button.
+ *
+ * The viewed player is always normalized to the left (p0) position,
+ * regardless of their position in the underlying game data.
  */
 
 import { useState, useEffect } from 'react';
@@ -13,6 +16,21 @@ import { BattleCard } from './EventCards';
 interface Props {
   profileId: number;
   onJumpToGame: (gameId: number) => void;
+}
+
+/**
+ * Determine battle outcome from the viewed player's perspective.
+ * Compares value lost: the player who lost less value "won" the exchange.
+ */
+function computeOutcome(
+  playerValueLost: number | null,
+  opponentValueLost: number | null,
+): 'win' | 'loss' | 'draw' {
+  const pv = playerValueLost ?? 0;
+  const ov = opponentValueLost ?? 0;
+  if (pv < ov) return 'win';
+  if (pv > ov) return 'loss';
+  return 'draw';
 }
 
 export function BattlesGallery({ profileId, onJumpToGame }: Props) {
@@ -43,30 +61,58 @@ export function BattlesGallery({ profileId, onJumpToGame }: Props) {
         {data.battles.length} battles across {new Set(data.battles.map(b => b.game_id)).size} games
       </div>
       <div className="ga-events-list">
-        {data.battles.map((b) => (
-          <BattleCard
-            key={b.battle_id}
-            battle={b}
-            p0Name={b.p0_name}
-            p1Name={b.p1_name}
-            p0ProfileId={b.p0_profile_id}
-            p1ProfileId={b.p1_profile_id}
-            isSelected={b.battle_id === selectedBattleId}
-            onClick={() => setSelectedBattleId(
-              b.battle_id === selectedBattleId ? null : b.battle_id
-            )}
-            gameContext={{
-              gameId: b.game_id,
-              date: b.game_started_at,
-              map: b.map,
-              p0Civ: b.p0_civ,
-              p1Civ: b.p1_civ,
-            }}
-            onJumpToGame={onJumpToGame}
-            classifications={data.classifications}
-            costs={data.costs}
-          />
-        ))}
+        {data.battles.map((b) => {
+          // Normalize: viewed player is always p0 (left column)
+          const needsSwap = b.p0_profile_id !== profileId;
+
+          const p0Name = needsSwap ? b.p1_name : b.p0_name;
+          const p1Name = needsSwap ? b.p0_name : b.p1_name;
+          const p0ProfileId = needsSwap ? b.p1_profile_id : b.p0_profile_id;
+          const p1ProfileId = needsSwap ? b.p0_profile_id : b.p1_profile_id;
+          const p0Civ = needsSwap ? b.p1_civ : b.p0_civ;
+          const p1Civ = needsSwap ? b.p0_civ : b.p1_civ;
+
+          // Swap the battle data fields so BattleCard sees them correctly
+          const normalizedBattle = needsSwap ? {
+            ...b,
+            p0_units_lost: b.p1_units_lost,
+            p1_units_lost: b.p0_units_lost,
+            p0_value_lost: b.p1_value_lost,
+            p1_value_lost: b.p0_value_lost,
+          } : b;
+
+          // Outcome from the viewed player's (now p0's) perspective
+          const outcome = computeOutcome(
+            normalizedBattle.p0_value_lost,
+            normalizedBattle.p1_value_lost,
+          );
+
+          return (
+            <BattleCard
+              key={b.battle_id}
+              battle={normalizedBattle}
+              p0Name={p0Name}
+              p1Name={p1Name}
+              p0ProfileId={p0ProfileId}
+              p1ProfileId={p1ProfileId}
+              isSelected={b.battle_id === selectedBattleId}
+              onClick={() => setSelectedBattleId(
+                b.battle_id === selectedBattleId ? null : b.battle_id
+              )}
+              gameContext={{
+                gameId: b.game_id,
+                date: b.game_started_at,
+                map: b.map,
+                p0Civ: p0Civ,
+                p1Civ: p1Civ,
+              }}
+              onJumpToGame={onJumpToGame}
+              classifications={data.classifications}
+              costs={data.costs}
+              outcome={outcome}
+            />
+          );
+        })}
       </div>
     </div>
   );

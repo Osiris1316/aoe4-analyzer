@@ -59,6 +59,8 @@ export interface BattleCardProps {
   onJumpToGame?: (gameId: number) => void;
   classifications?: Record<string, string>;
   costs?: Record<string, number>;
+  /** Battle outcome from p0's perspective. Shows a visual win/loss indicator. */
+  outcome?: 'win' | 'loss' | 'draw';
 }
 
 // ── Generic Donut Chart ────────────────────────────────────────────────
@@ -75,8 +77,7 @@ export interface DonutSegment {
  * From 12 going clockwise: p1's segments in order.
  * From 12 going counter-clockwise: p0's segments in order.
  *
- * This means the full clockwise rendering is:
- *   p1 segments (in order) → p0 segments (reversed)
+ * Full clockwise rendering: p1 segments (in order) → p0 segments (reversed)
  */
 export function DonutChart({ p0Segments, p1Segments, size = 64 }: {
   p0Segments: DonutSegment[];
@@ -134,7 +135,6 @@ export function DonutChart({ p0Segments, p1Segments, size = 64 }: {
     return { d, fill: seg.color, label: seg.label };
   });
 
-  // Build tooltip
   const tooltipText = visibleSegments
     .map(s => {
       const pct = Math.round((s.value / grandTotal) * 100);
@@ -158,7 +158,6 @@ export function DonutChart({ p0Segments, p1Segments, size = 64 }: {
 
 // ── Segment Builders ───────────────────────────────────────────────────
 
-/** Category colors — used for both the category donut and any future category displays */
 const CATEGORY_COLORS: Record<string, string> = {
   melee_infantry: 'var(--cat-melee-infantry, #e06040)',
   ranged:         'var(--cat-ranged, #4090e0)',
@@ -203,14 +202,13 @@ export function buildCategorySegments(
   for (const [lineKey, count] of Object.entries(composition)) {
     if (NON_MILITARY.has(lineKey)) continue;
     const cat = classifications[lineKey] ?? 'other';
-    if (cat === 'economy') continue; // eco shown in the other donut
+    if (cat === 'economy') continue;
     const value = count * (costs[lineKey] ?? 0);
     if (value > 0) {
       catValues.set(cat, (catValues.get(cat) ?? 0) + value);
     }
   }
 
-  // Return in CATEGORY_ORDER for consistent segment ordering
   const segments: DonutSegment[] = [];
 
   for (const catDef of CATEGORY_ORDER) {
@@ -225,7 +223,6 @@ export function buildCategorySegments(
     }
   }
 
-  // Add 'other' if present
   const otherVal = catValues.get('other');
   if (otherVal && otherVal > 0) {
     segments.push({
@@ -245,8 +242,10 @@ export function BattleCard({
   isSelected, onClick,
   gameContext, onJumpToGame,
   classifications, costs,
+  outcome,
 }: BattleCardProps) {
   const severityClass = `severity-${battle.severity}`;
+  const outcomeClass = outcome ? `outcome-${outcome}` : '';
 
   // Find pre-battle compositions
   const p0PreComp = battle.compositions.find(
@@ -264,7 +263,7 @@ export function BattleCard({
     ? computeValueBreakdown(p1PreComp.composition, costs, classifications)
     : null;
 
-  // Category segments for the second donut
+  // Category segments for second donut
   const p0CatSegs = (classifications && costs && p0PreComp)
     ? buildCategorySegments(p0PreComp.composition, classifications, costs)
     : [];
@@ -276,7 +275,7 @@ export function BattleCard({
 
   return (
     <div
-      className={`ga-event-card battle ${severityClass} ${isSelected ? 'selected' : ''}`}
+      className={`ga-event-card battle ${severityClass} ${outcomeClass} ${isSelected ? 'selected' : ''}`}
       onClick={onClick}
     >
       {/* Game context row — only in battles gallery */}
@@ -302,6 +301,11 @@ export function BattleCard({
         <span className={`ga-severity-label ${severityClass}`}>
           {severityLabel(battle.severity)}
         </span>
+        {outcome && (
+          <span className={`ga-outcome-badge ${outcome}`}>
+            {outcome === 'win' ? 'W' : outcome === 'loss' ? 'L' : '—'}
+          </span>
+        )}
       </div>
 
       {/* ── Two-column layout with two donuts ────────────────── */}
@@ -360,7 +364,6 @@ export function BattleCard({
           </div>
         </div>
       ) : (
-        /* Fallback: original vertical layout when no classification data */
         <div className="ga-event-stats">
           <div className="ga-loss p1">
             <span className="ga-loss-label">{p0Name}</span>
