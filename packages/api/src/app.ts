@@ -1,12 +1,12 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import type Database from 'better-sqlite3';
+import type { ApiReadDb } from './db';
 
 import { computeAliveMatrix } from '../../core/src/extraction/alive-matrix';
 import type { UnitEventsV3 } from '../../core/src/extraction/unit-events';
 
 interface CreateAppOptions {
-  db: Database.Database;
+  db: ApiReadDb;
   allowedOrigins?: string[];
 }
 
@@ -44,13 +44,18 @@ function classifyFromTags(tags: Set<string>): string {
   return 'other';
 }
 
-function buildClassificationsAndCosts(db: Database.Database): {
+async function buildClassificationsAndCosts(db: ApiReadDb): Promise<{
   classifications: Record<string, string>;
   costs: Record<string, number>;
-} {
-  const unitRows = db.prepare(
+}> {
+  const unitRows = await db.getMany<{
+    unit_id: string;
+    base_id: string;
+    classes: string;
+    costs: string;
+  }>(
     'SELECT unit_id, base_id, classes, costs FROM units'
-  ).all() as { unit_id: string; base_id: string; classes: string; costs: string }[];
+  );
 
   const classifications: Record<string, string> = {};
   const costs: Record<string, number> = {};
@@ -88,8 +93,8 @@ export function createApp({
 
   app.use('/api/*', cors({ origin: allowedOrigins }));
 
-  app.get('/api/players', (c) => {
-    const rows = db.prepare(`
+  app.get('/api/players', async (c) => {
+    const rows = await db.getMany<any>(`
       SELECT
         w.profile_id,
         w.name,
@@ -105,15 +110,15 @@ export function createApp({
       FROM watchlist w
       WHERE w.active = 1
       ORDER BY w.is_pro DESC, w.name
-    `).all();
+    `);
 
     return c.json(rows);
   });
 
-  app.get('/api/players/:profileId/games', (c) => {
+  app.get('/api/players/:profileId/games', async (c) => {
     const profileId = Number(c.req.param('profileId'));
 
-    const rows = db.prepare(`
+    const rows = await db.getMany<any>(`
       SELECT
         g.game_id,
         g.started_at,
@@ -149,20 +154,20 @@ export function createApp({
       LEFT JOIN watchlist w1 ON w1.profile_id = g.p1_profile_id
       WHERE g.p0_profile_id = ? OR g.p1_profile_id = ?
       ORDER BY g.started_at DESC
-    `).all(profileId, profileId, profileId, profileId, profileId, profileId);
+    `, [profileId, profileId, profileId, profileId, profileId, profileId]);
 
     return c.json(rows);
   });
 
-  app.get('/api/players/:profileId/battles', (c) => {
+  app.get('/api/players/:profileId/battles', async (c) => {
     const profileId = Number(c.req.param('profileId'));
 
-    const battleRows = db.prepare(`
+    const battleRows = await db.getMany<any>(`
       SELECT
         b.battle_id, b.game_id, b.start_sec, b.end_sec, b.duration_sec, b.severity,
         b.p0_units_lost, b.p1_units_lost, b.p0_value_lost, b.p1_value_lost, b.computed_at,
-        g.started_at   AS game_started_at,
-        g.duration_sec  AS game_duration_sec,
+        g.started_at AS game_started_at,
+        g.duration_sec AS game_duration_sec,
         g.map,
         g.p0_profile_id, g.p1_profile_id,
         g.p0_civ, g.p1_civ,
@@ -176,7 +181,7 @@ export function createApp({
       LEFT JOIN watchlist w1 ON w1.profile_id = g.p1_profile_id
       WHERE g.p0_profile_id = ? OR g.p1_profile_id = ?
       ORDER BY g.started_at DESC, b.start_sec ASC
-    `).all(profileId, profileId) as any[];
+    `, [profileId, profileId]);
 
     if (battleRows.length === 0) {
       return c.json({ battles: [], classifications: {}, costs: {} });
@@ -185,12 +190,12 @@ export function createApp({
     const battleIds = battleRows.map((b: any) => b.battle_id);
     const placeholders = battleIds.map(() => '?').join(',');
 
-    const allComps = db.prepare(`
+    const allComps = await db.getMany<any>(`
       SELECT battle_id, profile_id, phase, composition, tier_state, army_value
       FROM battle_compositions
       WHERE battle_id IN (${placeholders})
       ORDER BY battle_id, profile_id, phase
-    `).all(...battleIds) as any[];
+    `, battleIds);
 
     const compsByBattle = new Map<number, any[]>();
     for (const comp of allComps) {
@@ -202,12 +207,12 @@ export function createApp({
       });
     }
 
-    const allLosses = db.prepare(`
+    const allLosses = await db.getMany<any>(`
       SELECT battle_id, profile_id, line_key, units_lost, value_lost
       FROM battle_losses
       WHERE battle_id IN (${placeholders})
       ORDER BY battle_id, value_lost DESC
-    `).all(...battleIds) as any[];
+    `, battleIds);
 
     const lossesByBattle = new Map<number, any[]>();
     for (const loss of allLosses) {
@@ -241,15 +246,15 @@ export function createApp({
       losses: lossesByBattle.get(b.battle_id) ?? [],
     }));
 
-    const { classifications, costs } = buildClassificationsAndCosts(db);
+    const { classifications, costs } = await buildClassificationsAndCosts(db);
 
     return c.json({ battles, classifications, costs });
   });
 
-  app.get('/api/games/:gameId', (c) => {
+  app.get('/api/games/:gameId', async (c) => {
     const gameId = Number(c.req.param('gameId'));
 
-    const game = db.prepare(`
+    const game = await db.getOne<any>(`
       SELECT
         g.game_id,
         g.started_at,
@@ -272,7 +277,7 @@ export function createApp({
       LEFT JOIN watchlist w0 ON w0.profile_id = g.p0_profile_id
       LEFT JOIN watchlist w1 ON w1.profile_id = g.p1_profile_id
       WHERE g.game_id = ?
-    `).get(gameId);
+    `, [gameId]);
 
     if (!game) {
       return c.json({ error: 'Game not found' }, 404);
@@ -281,56 +286,64 @@ export function createApp({
     return c.json(game);
   });
 
-  app.get('/api/games/:gameId/timeline', (c) => {
+  app.get('/api/games/:gameId/timeline', async (c) => {
     const gameId = Number(c.req.param('gameId'));
 
-    const game = db.prepare(
-      'SELECT game_id, duration_sec, p0_profile_id, p1_profile_id FROM games WHERE game_id = ?'
-    ).get(gameId) as { game_id: number; duration_sec: number; p0_profile_id: number; p1_profile_id: number } | undefined;
+    const game = await db.getOne<{
+      game_id: number;
+      duration_sec: number;
+      p0_profile_id: number;
+      p1_profile_id: number;
+    }>(
+      'SELECT game_id, duration_sec, p0_profile_id, p1_profile_id FROM games WHERE game_id = ?',
+      [gameId]
+    );
 
     if (!game) {
       return c.json({ error: 'Game not found' }, 404);
     }
 
-    const battleRows = db.prepare(`
+    const battleRows = await db.getMany<any>(`
       SELECT battle_id, start_sec, end_sec, duration_sec, severity,
              p0_units_lost, p1_units_lost, p0_value_lost, p1_value_lost, computed_at
       FROM battles
       WHERE game_id = ?
       ORDER BY start_sec
-    `).all(gameId) as any[];
+    `, [gameId]);
 
-    const battles = battleRows.map((b) => {
-      const compositions = db.prepare(`
-        SELECT profile_id, phase, composition, tier_state, army_value
-        FROM battle_compositions
-        WHERE battle_id = ?
-        ORDER BY profile_id, phase
-      `).all(b.battle_id) as any[];
+    const battles = await Promise.all(
+      battleRows.map(async (b: any) => {
+        const compositions = await db.getMany<any>(`
+          SELECT profile_id, phase, composition, tier_state, army_value
+          FROM battle_compositions
+          WHERE battle_id = ?
+          ORDER BY profile_id, phase
+        `, [b.battle_id]);
 
-      const parsedComps = compositions.map((comp: any) => ({
-        ...comp,
-        composition: JSON.parse(comp.composition),
-        tier_state: comp.tier_state ? JSON.parse(comp.tier_state) : null,
-      }));
+        const parsedComps = compositions.map((comp: any) => ({
+          ...comp,
+          composition: JSON.parse(comp.composition),
+          tier_state: comp.tier_state ? JSON.parse(comp.tier_state) : null,
+        }));
 
-      const losses = db.prepare(`
-        SELECT profile_id, line_key, units_lost, value_lost
-        FROM battle_losses
-        WHERE battle_id = ?
-        ORDER BY value_lost DESC
-      `).all(b.battle_id);
+        const losses = await db.getMany<any>(`
+          SELECT profile_id, line_key, units_lost, value_lost
+          FROM battle_losses
+          WHERE battle_id = ?
+          ORDER BY value_lost DESC
+        `, [b.battle_id]);
 
-      return { ...b, compositions: parsedComps, losses };
-    });
+        return { ...b, compositions: parsedComps, losses };
+      })
+    );
 
-    const periodRows = db.prepare(`
+    const periodRows = await db.getMany<any>(`
       SELECT period_id, start_sec, end_sec, duration_sec,
              p0_units_produced, p1_units_produced, computed_at
       FROM inter_battle_periods
       WHERE game_id = ?
       ORDER BY start_sec
-    `).all(gameId) as any[];
+    `, [gameId]);
 
     const periods = periodRows.map((p: any) => ({
       ...p,
@@ -372,28 +385,35 @@ export function createApp({
     });
   });
 
-  app.get('/api/games/:gameId/alive-matrix', (c) => {
+  app.get('/api/games/:gameId/alive-matrix', async (c) => {
     const gameId = Number(c.req.param('gameId'));
 
-    const game = db.prepare(
-      'SELECT game_id, duration_sec, p0_profile_id, p1_profile_id FROM games WHERE game_id = ?'
-    ).get(gameId) as { game_id: number; duration_sec: number; p0_profile_id: number; p1_profile_id: number } | undefined;
+    const game = await db.getOne<{
+      game_id: number;
+      duration_sec: number;
+      p0_profile_id: number;
+      p1_profile_id: number;
+    }>(
+      'SELECT game_id, duration_sec, p0_profile_id, p1_profile_id FROM games WHERE game_id = ?',
+      [gameId]
+    );
 
     if (!game) {
       return c.json({ error: 'Game not found' }, 404);
     }
 
-    const loadEvents = (profileId: number): UnitEventsV3 | null => {
-      const row = db.prepare(
-        'SELECT unit_events_json FROM game_player_data WHERE game_id = ? AND profile_id = ?'
-      ).get(gameId, profileId) as { unit_events_json: string | null } | undefined;
+    const loadEvents = async (profileId: number): Promise<UnitEventsV3 | null> => {
+      const row = await db.getOne<{ unit_events_json: string | null }>(
+        'SELECT unit_events_json FROM game_player_data WHERE game_id = ? AND profile_id = ?',
+        [gameId, profileId]
+      );
 
       if (!row?.unit_events_json) return null;
-      return JSON.parse(row.unit_events_json);
+      return JSON.parse(row.unit_events_json) as UnitEventsV3;
     };
 
-    const p0Events = loadEvents(game.p0_profile_id);
-    const p1Events = loadEvents(game.p1_profile_id);
+    const p0Events = await loadEvents(game.p0_profile_id);
+    const p1Events = await loadEvents(game.p1_profile_id);
 
     if (!p0Events || !p1Events) {
       return c.json({ error: 'Unit events not extracted for this game' }, 404);
@@ -408,7 +428,7 @@ export function createApp({
       return obj;
     };
 
-    const { classifications, costs } = buildClassificationsAndCosts(db);
+    const { classifications, costs } = await buildClassificationsAndCosts(db);
 
     return c.json({
       game_id: gameId,
