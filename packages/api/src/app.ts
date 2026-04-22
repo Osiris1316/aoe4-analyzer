@@ -15,6 +15,14 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:5174',
 ];
 
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
 function classifyFromTags(tags: Set<string>): string {
   if (tags.has('worker') || tags.has('villager')) return 'economy';
   if (tags.has('trade_cart') || tags.has('trade_camel')) return 'economy';
@@ -188,14 +196,19 @@ export function createApp({
     }
 
     const battleIds = battleRows.map((b: any) => b.battle_id);
-    const placeholders = battleIds.map(() => '?').join(',');
+    const battleIdChunks = chunkArray(battleIds, 75);
 
-    const allComps = await db.getMany<any>(`
-      SELECT battle_id, profile_id, phase, composition, tier_state, army_value
-      FROM battle_compositions
-      WHERE battle_id IN (${placeholders})
-      ORDER BY battle_id, profile_id, phase
-    `, battleIds);
+    const allComps: any[] = [];
+    for (const chunk of battleIdChunks) {
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = await db.getMany<any>(`
+        SELECT battle_id, profile_id, phase, composition, tier_state, army_value
+        FROM battle_compositions
+        WHERE battle_id IN (${placeholders})
+        ORDER BY battle_id, profile_id, phase
+      `, chunk);
+      allComps.push(...rows);
+    }
 
     const compsByBattle = new Map<number, any[]>();
     for (const comp of allComps) {
@@ -207,12 +220,17 @@ export function createApp({
       });
     }
 
-    const allLosses = await db.getMany<any>(`
-      SELECT battle_id, profile_id, line_key, units_lost, value_lost
-      FROM battle_losses
-      WHERE battle_id IN (${placeholders})
-      ORDER BY battle_id, value_lost DESC
-    `, battleIds);
+    const allLosses: any[] = [];
+    for (const chunk of battleIdChunks) {
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = await db.getMany<any>(`
+        SELECT battle_id, profile_id, line_key, units_lost, value_lost
+        FROM battle_losses
+        WHERE battle_id IN (${placeholders})
+        ORDER BY battle_id, value_lost DESC
+      `, chunk);
+      allLosses.push(...rows);
+    }
 
     const lossesByBattle = new Map<number, any[]>();
     for (const loss of allLosses) {

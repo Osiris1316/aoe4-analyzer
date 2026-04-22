@@ -3,3 +3,5 @@ data/local.db
 data/local.db-wal
 data/local.db-shm
 .env
+/d1-seed-*.sql
+.wrangler/

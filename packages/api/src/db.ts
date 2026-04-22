@@ -17,3 +17,29 @@ export function createSqliteApiReadDb(db: Database.Database): ApiReadDb {
     },
   };
 }
+
+export function createD1ApiReadDb(database: D1Database): ApiReadDb {
+  return {
+    async getOne<T>(sql: string, params: unknown[] = []): Promise<T | null> {
+      let stmt = database.prepare(sql);
+
+      if (params.length > 0) {
+        stmt = stmt.bind(...params);
+      }
+
+      const row = await stmt.first<T>();
+      return row ?? null;
+    },
+
+    async getMany<T>(sql: string, params: unknown[] = []): Promise<T[]> {
+      let stmt = database.prepare(sql);
+
+      if (params.length > 0) {
+        stmt = stmt.bind(...params);
+      }
+
+      const result = await stmt.all<T>();
+      return result.results ?? [];
+    },
+  };
+}

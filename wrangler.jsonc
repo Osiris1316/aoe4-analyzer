@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "aoe4-analyzer-api",
+  "main": "packages/api/src/worker.ts",
+  "compatibility_date": "2026-04-20",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aoe4-analyzer-db",
+      "database_id": "a505c4e3-62ee-41fe-8875-79e8d241b745",
+      "remote": true
+    }
+  ],
+  "vars": {
+    "FRONTEND_ORIGIN": ""
+  }
+}
