@@ -1231,7 +1231,11 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 
 @media (max-width: 600px) {
   .ga-delta-row {
-    grid-template-columns: 32px 56px 56px 32px;
+    grid-template-columns: 26px 44px 44px 26px;
+  }
+
+  .ga-delta-columns {
+    gap: 6px;
   }
 
   .ga-delta-row .ga-delta-name {
