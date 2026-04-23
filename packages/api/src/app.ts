@@ -109,6 +109,7 @@ export function createApp({
         w.is_pro,
         w.active,
         w.last_fetched,
+        w.rating,
         (
           SELECT COUNT(*)
           FROM games g
@@ -117,7 +118,7 @@ export function createApp({
         ) AS game_count
       FROM watchlist w
       WHERE w.active = 1
-      ORDER BY w.is_pro DESC, w.name
+      ORDER BY w.rating IS NULL, w.rating DESC, w.is_pro DESC, w.name
     `);
 
     return c.json(rows);

@@ -38,9 +38,7 @@ export function PlayerGallery({ onSelectPlayer }: Props) {
   useEffect(() => {
     api.getPlayers()
       .then((data) => {
-        // Sort by game_count descending (we don't have MMR in the
-        // watchlist response yet — game count is a decent proxy for now)
-        data.sort((a, b) => b.game_count - a.game_count);
+        // API returns pre-sorted by rating DESC, then is_pro, then name
         setPlayers(data);
       })
       .catch((err) => console.error('Failed to load players:', err))
@@ -86,16 +84,16 @@ export function PlayerGallery({ onSelectPlayer }: Props) {
                 {player.is_pro === 1 && <span className="pro-badge">Pro</span>}
               </div>
               <div className="player-meta">
+                {player.rating != null && (
+                  <span>
+                    <span className="label">Rating</span>
+                    <span className="mono">{player.rating}</span>
+                  </span>
+                )}
                 <span>
                   <span className="label">Games</span>
                   <span className="mono">{player.game_count}</span>
                 </span>
-                {player.last_fetched && (
-                  <span>
-                    <span className="label">Last fetch</span>
-                    {new Date(player.last_fetched).toLocaleDateString()}
-                  </span>
-                )}
               </div>
             </div>
           ))}

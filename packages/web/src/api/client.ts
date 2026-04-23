@@ -18,6 +18,7 @@ export interface Player {
   is_pro: number;     // 0 or 1
   active: number;
   last_fetched: string | null;
+  rating: number | null;
   game_count: number;
 }
 

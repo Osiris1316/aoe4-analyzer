@@ -1,0 +1,12 @@
+{
+  "name": "@aoe4-analyzer/jobs",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260423.1",
+    "wrangler": "^4.0.0"
+  }
+}

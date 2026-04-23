@@ -1,0 +1,16 @@
+{
+  "name": "aoe4-analyzer-jobs",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-12-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aoe4-analyzer-db",
+      "database_id": "a505c4e3-62ee-41fe-8875-79e8d241b745",
+      "remote": true
+    }
+  ],
+  "triggers": {
+    "crons": ["0 * * * *"]
+  }
+}
