@@ -5,3 +5,5 @@ data/local.db-shm
 .env
 /d1-seed-*.sql
 .wrangler/
+.env.production
+packages/web/dist/

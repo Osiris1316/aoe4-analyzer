@@ -12,6 +12,6 @@
     }
   ],
   "vars": {
-    "FRONTEND_ORIGIN": ""
+    "FRONTEND_ORIGIN": "https://aoe4-analyzer.pages.dev"
   }
 }

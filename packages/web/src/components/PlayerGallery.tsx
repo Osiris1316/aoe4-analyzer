@@ -74,7 +74,7 @@ export function PlayerGallery({ onSelectPlayer }: Props) {
           {search ? 'No players match your search' : 'No players with games found'}
         </div>
       ) : (
-        <div className="card-gallery">
+        <div className="player-list">
           {filtered.map((player) => (
             <div
               key={player.profile_id}

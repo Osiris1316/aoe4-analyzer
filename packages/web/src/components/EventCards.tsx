@@ -406,12 +406,12 @@ function DeltaRow({ delta }: { delta: UnitLineDelta }) {
       <span className="ga-delta-cell col-start mono">{start}</span>
       <span className="ga-delta-cell col-added mono">
         {produced > 0 && (
-          <span className="ga-delta-chip produced" title={`${produced} produced`}>▲{produced}</span>
+          <span className="ga-delta-chip produced" title={`${produced} produced`}>▲ {produced}</span>
         )}
       </span>
       <span className="ga-delta-cell col-lost mono">
         {lost > 0 && (
-          <span className="ga-delta-chip lost" title={`${lost} lost`}>▼{lost}</span>
+          <span className="ga-delta-chip lost" title={`${lost} lost`}>▼ {lost}</span>
         )}
       </span>
       <span className="ga-delta-cell col-end mono">{end}</span>

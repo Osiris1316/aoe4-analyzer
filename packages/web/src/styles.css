@@ -299,12 +299,24 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   border-color: var(--text-muted);
 }
 
-/* ── Player Card ──────────────────────────────────────────────────── */
+/* ── Player List + Player Card ────────────────────────────────────── */
+
+.player-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.player-list .player-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: 20px;
+}
 
 .player-card .player-name {
   font-size: 15px;
   font-weight: 600;
-  margin-bottom: 8px;
 }
 
 .player-card .player-meta {
@@ -331,6 +343,20 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   border-radius: 3px;
   margin-left: 8px;
   vertical-align: middle;
+}
+
+@media (max-width: 600px) {
+  .player-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+
+  .player-list .player-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 /* ── Game Card ────────────────────────────────────────────────────── */
@@ -1199,6 +1225,33 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 .ga-delta-chip.lost {
   color: #ef4444;
   background: rgba(239, 68, 68, 0.1);
+}
+
+/* ── Delta Row: mobile portrait — name above numbers ──────────────── */
+
+@media (max-width: 600px) {
+  .ga-delta-row {
+    grid-template-columns: 32px 56px 56px 32px;
+  }
+
+  .ga-delta-row .ga-delta-name {
+    grid-column: 1 / -1;
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 1px;
+  }
+
+  .ga-delta-row.header .ga-delta-name {
+    display: none;
+  }
+
+  .ga-delta-row.spacer::before {
+    content: '\00a0';
+    grid-column: 1 / -1;
+    font-size: 11px;
+    line-height: 1.5;
+    margin-bottom: 1px;
+  }
 }
 
 /* ── Battle Outcome Indicator ─────────────────────────────────────── */
