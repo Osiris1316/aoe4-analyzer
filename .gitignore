@@ -7,3 +7,4 @@ data/local.db-shm
 .wrangler/
 .env.production
 packages/web/dist/
+data/*.sql

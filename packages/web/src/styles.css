@@ -1130,6 +1130,30 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
 
 .ga-prod-stat { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 
+/* ── Twitch VOD links ─────────────────────────────────── */
+
+.ga-vod-links {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.ga-vod-link {
+  font-size: 12px;
+  font-weight: 500;
+  color: #a970ff;
+  text-decoration: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(169, 112, 255, 0.1);
+  transition: background 0.15s;
+}
+
+.ga-vod-link:hover {
+  background: rgba(169, 112, 255, 0.25);
+  text-decoration: none;
+}
+
 /* ── Composition Delta Columns ────────────────────────────────────── */
 
 .ga-delta-columns {

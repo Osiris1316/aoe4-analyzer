@@ -174,7 +174,7 @@ export function createApp({
     const battleRows = await db.getMany<any>(`
       SELECT
         b.battle_id, b.game_id, b.start_sec, b.end_sec, b.duration_sec, b.severity,
-        b.p0_units_lost, b.p1_units_lost, b.p0_value_lost, b.p1_value_lost, b.computed_at,
+        b.p0_units_lost, b.p1_units_lost, b.p0_value_lost, b.p1_value_lost, b.computed_at, b.p0_twitch_vod_url, b.p1_twitch_vod_url,
         g.started_at AS game_started_at,
         g.duration_sec AS game_duration_sec,
         g.map,
@@ -261,6 +261,8 @@ export function createApp({
       p1_name: b.p1_name,
       p0_result: b.p0_result,
       p1_result: b.p1_result,
+      p0_twitch_vod_url: b.p0_twitch_vod_url,
+      p1_twitch_vod_url: b.p1_twitch_vod_url,
       compositions: compsByBattle.get(b.battle_id) ?? [],
       losses: lossesByBattle.get(b.battle_id) ?? [],
     }));
@@ -324,7 +326,8 @@ export function createApp({
 
     const battleRows = await db.getMany<any>(`
       SELECT battle_id, start_sec, end_sec, duration_sec, severity,
-             p0_units_lost, p1_units_lost, p0_value_lost, p1_value_lost, computed_at
+             p0_units_lost, p1_units_lost, p0_value_lost, p1_value_lost, computed_at,
+             p0_twitch_vod_url, p1_twitch_vod_url
       FROM battles
       WHERE game_id = ?
       ORDER BY start_sec

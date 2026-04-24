@@ -26,6 +26,8 @@ export interface BattleData {
   p1_units_lost: number | null;
   p0_value_lost: number | null;
   p1_value_lost: number | null;
+  p0_twitch_vod_url?: string | null;
+  p1_twitch_vod_url?: string | null;
   compositions: Array<{
     profile_id: number;
     phase: string;
@@ -484,6 +486,12 @@ export function BattleCard({
         {outcome && (
           <span className={`ga-outcome-badge ${outcome}`}>
             {outcome === 'win' ? 'W' : outcome === 'loss' ? 'L' : '—'}
+          </span>
+        )}
+        {(battle.p0_twitch_vod_url || battle.p1_twitch_vod_url) && (
+          <span className="ga-vod-links">
+            {battle.p0_twitch_vod_url && <a href={battle.p0_twitch_vod_url} target="_blank" rel="noopener noreferrer" className="ga-vod-link" onClick={(e) => e.stopPropagation()} title={`Watch ${p0Name}'s POV`}>▶ {battle.p1_twitch_vod_url ? p0Name : 'Watch'}</a>}
+            {battle.p1_twitch_vod_url && <a href={battle.p1_twitch_vod_url} target="_blank" rel="noopener noreferrer" className="ga-vod-link" onClick={(e) => e.stopPropagation()} title={`Watch ${p1Name}'s POV`}>▶ {battle.p0_twitch_vod_url ? p1Name : 'Watch'}</a>}
           </span>
         )}
       </div>
