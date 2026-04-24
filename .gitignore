@@ -8,3 +8,4 @@ data/local.db-shm
 .env.production
 packages/web/dist/
 data/*.sql
+dist/

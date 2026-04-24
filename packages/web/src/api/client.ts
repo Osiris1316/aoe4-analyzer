@@ -40,6 +40,7 @@ export interface GameListEntry {
   player_civ: string;
   opponent_civ: string;
   battle_count: number;
+  vod_count: number;
 }
 
 export interface GameMeta {
@@ -80,6 +81,8 @@ export interface TimelineBattle {
   p1_units_lost: number | null;
   p0_value_lost: number | null;
   p1_value_lost: number | null;
+  p0_twitch_vod_url: string | null;
+  p1_twitch_vod_url: string | null;
   computed_at: string;
   compositions: TimelineComposition[];
   losses: { profile_id: number; line_key: string; units_lost: number; value_lost: number }[];
@@ -133,6 +136,9 @@ export interface PlayerBattle {
   p1_units_lost: number;
   p0_value_lost: number | null;
   p1_value_lost: number | null;
+  p0_twitch_vod_url: string | null;
+  p1_twitch_vod_url: string | null;
+  
   // Game context
   game_started_at: string;
   game_duration_sec: number;

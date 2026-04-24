@@ -157,7 +157,8 @@ export function createApp({
           WHEN g.p0_profile_id = ? THEN g.p1_civ
           ELSE g.p0_civ
         END AS opponent_civ,
-        (SELECT COUNT(*) FROM battles b WHERE b.game_id = g.game_id) AS battle_count
+        (SELECT COUNT(*) FROM battles b WHERE b.game_id = g.game_id) AS battle_count,
+        (SELECT COUNT(*) FROM battles b WHERE b.game_id = g.game_id AND (b.p0_twitch_vod_url IS NOT NULL OR b.p1_twitch_vod_url IS NOT NULL)) AS vod_count
       FROM games g
       LEFT JOIN watchlist w0 ON w0.profile_id = g.p0_profile_id
       LEFT JOIN watchlist w1 ON w1.profile_id = g.p1_profile_id

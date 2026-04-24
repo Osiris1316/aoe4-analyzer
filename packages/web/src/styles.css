@@ -1154,6 +1154,12 @@ body, .card, .ga-event-card, .ga-alive-panel, .ga-chart-container,
   text-decoration: none;
 }
 
+.vod-indicator {
+  color: #a970ff;
+  font-size: 11px;
+  margin-left: 2px;
+}
+
 /* ── Composition Delta Columns ────────────────────────────────────── */
 
 .ga-delta-columns {

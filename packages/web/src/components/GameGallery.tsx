@@ -73,6 +73,7 @@ export function GameGallery({ profileId, playerName, onSelectGame }: Props) {
               <span>{formatDuration(game.duration_sec)}</span>
               <span>
                 {game.battle_count} {game.battle_count === 1 ? 'battle' : 'battles'}
+                {game.vod_count > 0 && <span className="vod-indicator" title={`${game.vod_count} battle(s) with VOD`}> ▶</span>}
               </span>
               {game.map && <span>{game.map}</span>}
               <span className="game-date">
