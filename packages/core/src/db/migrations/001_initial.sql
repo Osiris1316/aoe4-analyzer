@@ -13,7 +13,8 @@ CREATE TABLE watchlist (
   is_pro       INTEGER NOT NULL DEFAULT 0,   -- 1 = pro/reference player
   added_at     TEXT    NOT NULL DEFAULT (datetime('now')),
   last_fetched TEXT,
-  active       INTEGER NOT NULL DEFAULT 1
+  active       INTEGER NOT NULL DEFAULT 1,
+  rating       INTEGER
 );
 
 -- ---------------------------------------------------------------
@@ -36,6 +37,8 @@ CREATE TABLE games (
   p0_rating      INTEGER,
   p1_rating      INTEGER,
   core_json      TEXT    NOT NULL, -- full game-level JSON blob
+  p0_twitch_vod_url TEXT,
+  p1_twitch_vod_url TEXT,
   matchup        TEXT    GENERATED ALWAYS AS (
                    -- Always alphabetically ordered so 'english_vs_hre' and
                    -- 'hre_vs_english' both become 'english_vs_hre' regardless
@@ -82,6 +85,8 @@ CREATE TABLE battles (
   p0_value_lost   REAL,
   p1_value_lost   REAL,
   computed_at     TEXT    NOT NULL,
+  p0_twitch_vod_url TEXT,
+  p1_twitch_vod_url TEXT,
   FOREIGN KEY (game_id) REFERENCES games(game_id)
 );
 

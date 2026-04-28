@@ -18,6 +18,20 @@
 import type Database from 'better-sqlite3';
 import type { GameSegmentation } from './game-segmentation';
 
+// ── VOD URL helpers (ported from backfill-vod-urls.ts) ─────────────
+
+function parseTwitchTimestamp(vodUrl: string): number | null {
+  const match = vodUrl.match(/[?&]t=(\d+)s/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+function computeBattleVodUrl(gameVodUrl: string, battleStartSec: number): string | null {
+  const gameTimestamp = parseTwitchTimestamp(gameVodUrl);
+  if (gameTimestamp === null) return null;
+  const battleTimestamp = gameTimestamp + Math.round(battleStartSec);
+  return gameVodUrl.replace(/[?&]t=\d+s/, `?t=${battleTimestamp}s`);
+}
+
 // ── Public API ─────────────────────────────────────────────────────────
 
 /**
@@ -62,12 +76,21 @@ export function persistAnalysis(
     db.prepare('DELETE FROM battles WHERE game_id = ?').run(gameId);
     db.prepare('DELETE FROM inter_battle_periods WHERE game_id = ?').run(gameId);
 
+    // ── Fetch game-level VOD URLs for battle timestamp computation ──
+    const gameVods = db.prepare(
+      'SELECT p0_twitch_vod_url, p1_twitch_vod_url FROM games WHERE game_id = ?'
+    ).get(gameId) as { p0_twitch_vod_url: string | null; p1_twitch_vod_url: string | null } | undefined;
+
+    const p0GameVod = gameVods?.p0_twitch_vod_url ?? null;
+    const p1GameVod = gameVods?.p1_twitch_vod_url ?? null;
+
     // ── Step 2: Insert battles and capture their auto-generated IDs ──
 
     const insertBattle = db.prepare(`
       INSERT INTO battles (game_id, start_sec, end_sec, severity,
-        p0_units_lost, p1_units_lost, p0_value_lost, p1_value_lost, computed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        p0_units_lost, p1_units_lost, p0_value_lost, p1_value_lost, computed_at,
+        p0_twitch_vod_url, p1_twitch_vod_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertComposition = db.prepare(`
@@ -108,6 +131,8 @@ export function persistAnalysis(
         p0Losses?.valueLost ?? 0,
         p1Losses?.valueLost ?? 0,
         computedAt,
+        p0GameVod ? computeBattleVodUrl(p0GameVod, battle.startSec) : null,
+        p1GameVod ? computeBattleVodUrl(p1GameVod, battle.startSec) : null,
       );
 
       // Capture the auto-incremented battle_id

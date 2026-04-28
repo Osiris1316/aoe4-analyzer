@@ -276,8 +276,9 @@ export async function ingestOnePlayer(
             p0_civ, p1_civ,
             p0_result, p1_result,
             p0_rating, p1_rating,
-            core_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            core_json,
+            p0_twitch_vod_url, p1_twitch_vod_url
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           gameId,
           startedAtIso,
@@ -293,7 +294,9 @@ export async function ingestOnePlayer(
           p1.result,
           getRatingFromGameList(gameEntry, p0.profileId),
           getRatingFromGameList(gameEntry, p1.profileId),
-          JSON.stringify(coreScrubbed)
+          JSON.stringify(coreScrubbed),
+          getVodUrlFromGameList(gameEntry, p0.profileId),
+          getVodUrlFromGameList(gameEntry, p1.profileId)
         );
 
         // Insert player data for BOTH players
@@ -400,6 +403,23 @@ function getRatingFromGameList(
     for (const slot of team) {
       if (slot.player.profile_id === profileId) {
         return slot.player.mmr ?? slot.player.rating ?? null;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract a player's Twitch VOD URL from the game list entry.
+ */
+function getVodUrlFromGameList(
+  gameEntry: ApiGameListEntry,
+  profileId: number
+): string | null {
+  for (const team of gameEntry.teams) {
+    for (const slot of team) {
+      if (slot.player.profile_id === profileId) {
+        return (slot.player as any).twitch_video_url ?? null;
       }
     }
   }
