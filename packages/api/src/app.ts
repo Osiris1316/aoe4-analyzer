@@ -464,5 +464,154 @@ export function createApp({
     });
   });
 
+// ── Global Battles Search ──────────────────────────────────────────
+
+  app.get('/api/battles', async (c) => {
+    const civ1 = c.req.query('civ1');
+    const civ2 = c.req.query('civ2');
+    const severityFilter = c.req.query('severity');
+
+    let whereClause = '';
+    const bindValues: (string | number)[] = [];
+
+    if (civ1 && civ2) {
+      whereClause = 'WHERE ((g.p0_civ = ? AND g.p1_civ = ?) OR (g.p0_civ = ? AND g.p1_civ = ?))';
+      bindValues.push(civ1, civ2, civ2, civ1);
+    } else if (civ1) {
+      whereClause = 'WHERE (g.p0_civ = ? OR g.p1_civ = ?)';
+      bindValues.push(civ1, civ1);
+    }
+
+    if (severityFilter) {
+      const connector = whereClause ? ' AND ' : 'WHERE ';
+      whereClause += `${connector}b.severity = ?`;
+      bindValues.push(severityFilter);
+    }
+
+    const vodOnly = c.req.query('vod');
+    if (vodOnly === '1') {
+      const connector = whereClause ? ' AND ' : 'WHERE ';
+      whereClause += `${connector}(b.p0_twitch_vod_url IS NOT NULL OR b.p1_twitch_vod_url IS NOT NULL)`;
+    }
+
+    const battleRows = await db.getMany<any>(`
+      SELECT
+        b.battle_id,
+        b.game_id,
+        b.start_sec,
+        b.end_sec,
+        b.duration_sec,
+        b.severity,
+        b.p0_units_lost,
+        b.p1_units_lost,
+        b.p0_value_lost,
+        b.p1_value_lost,
+        b.p0_twitch_vod_url,
+        b.p1_twitch_vod_url,
+        g.p0_civ,
+        g.p1_civ,
+        g.p0_profile_id,
+        g.p1_profile_id,
+        g.p0_result,
+        g.map,
+        g.duration_sec AS game_duration_sec,
+        g.started_at,
+        w0.name AS p0_name,
+        w1.name AS p1_name,
+        w0.rating AS p0_rating,
+        w1.rating AS p1_rating
+      FROM battles b
+      JOIN games g ON g.game_id = b.game_id
+      LEFT JOIN watchlist w0 ON w0.profile_id = g.p0_profile_id
+      LEFT JOIN watchlist w1 ON w1.profile_id = g.p1_profile_id
+      ${whereClause}
+      ORDER BY g.started_at DESC, b.start_sec ASC
+      LIMIT 200
+    `, bindValues);
+
+    if (battleRows.length === 0) {
+      return c.json({ battles: [], classifications: {}, costs: {}, total: 0 });
+    }
+
+    // Fetch compositions in chunks (same pattern as player battles)
+    const battleIds = battleRows.map((b: any) => b.battle_id);
+    const battleIdChunks = chunkArray(battleIds, 75);
+
+    const allComps: any[] = [];
+    for (const chunk of battleIdChunks) {
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = await db.getMany<any>(`
+        SELECT battle_id, profile_id, phase, composition, tier_state, army_value
+        FROM battle_compositions
+        WHERE battle_id IN (${placeholders})
+        ORDER BY battle_id, profile_id, phase
+      `, chunk);
+      allComps.push(...rows);
+    }
+
+    const compsByBattle = new Map<number, any[]>();
+    for (const comp of allComps) {
+      if (!compsByBattle.has(comp.battle_id)) compsByBattle.set(comp.battle_id, []);
+      compsByBattle.get(comp.battle_id)!.push({
+        ...comp,
+        composition: JSON.parse(comp.composition),
+        tier_state: comp.tier_state ? JSON.parse(comp.tier_state) : null,
+      });
+    }
+
+    // Fetch losses in chunks
+    const allLosses: any[] = [];
+    for (const chunk of battleIdChunks) {
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = await db.getMany<any>(`
+        SELECT battle_id, profile_id, line_key, units_lost, value_lost
+        FROM battle_losses
+        WHERE battle_id IN (${placeholders})
+        ORDER BY battle_id, value_lost DESC
+      `, chunk);
+      allLosses.push(...rows);
+    }
+
+    const lossesByBattle = new Map<number, any[]>();
+    for (const loss of allLosses) {
+      if (!lossesByBattle.has(loss.battle_id)) lossesByBattle.set(loss.battle_id, []);
+      lossesByBattle.get(loss.battle_id)!.push(loss);
+    }
+
+    // Assemble battle objects
+    const battles = battleRows.map((b: any) => ({
+      battle_id: b.battle_id,
+      game_id: b.game_id,
+      start_sec: b.start_sec,
+      end_sec: b.end_sec,
+      duration_sec: b.duration_sec,
+      severity: b.severity,
+      p0_units_lost: b.p0_units_lost,
+      p1_units_lost: b.p1_units_lost,
+      p0_value_lost: b.p0_value_lost,
+      p1_value_lost: b.p1_value_lost,
+      p0_twitch_vod_url: b.p0_twitch_vod_url,
+      p1_twitch_vod_url: b.p1_twitch_vod_url,
+      p0_civ: b.p0_civ,
+      p1_civ: b.p1_civ,
+      p0_profile_id: b.p0_profile_id,
+      p1_profile_id: b.p1_profile_id,
+      p0_result: b.p0_result,
+      map: b.map,
+      game_duration_sec: b.game_duration_sec,
+      started_at: b.started_at,
+      p0_name: b.p0_name,
+      p1_name: b.p1_name,
+      p0_rating: b.p0_rating,
+      p1_rating: b.p1_rating,
+      compositions: compsByBattle.get(b.battle_id) ?? [],
+      losses: lossesByBattle.get(b.battle_id) ?? [],
+    }));
+
+    const { classifications, costs } = await buildClassificationsAndCosts(db);
+
+    return c.json({ battles, classifications, costs, total: battles.length });
+  });
+
   return app;
 }

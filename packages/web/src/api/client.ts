@@ -208,3 +208,76 @@ export const api = {
   getPlayerBattles: (profileId: number) =>
   fetchJson<PlayerBattlesResponse>(`/api/players/${profileId}/battles`),
 };
+
+// ── Global Battles ─────────────────────────────────────────────────
+
+export interface GlobalBattle {
+  battle_id: number;
+  game_id: number;
+  start_sec: number;
+  end_sec: number;
+  duration_sec: number;
+  severity: string;
+  p0_units_lost: number | null;
+  p1_units_lost: number | null;
+  p0_value_lost: number | null;
+  p1_value_lost: number | null;
+  p0_twitch_vod_url: string | null;
+  p1_twitch_vod_url: string | null;
+  p0_civ: string;
+  p1_civ: string;
+  p0_profile_id: number;
+  p1_profile_id: number;
+  p0_name: string;
+  p1_name: string;
+  p0_rating: number | null;
+  p1_rating: number | null;
+  p0_result: string | null;
+  p0_army_value: number | null;
+  p1_army_value: number | null;
+  map: string | null;
+  game_duration_sec: number;
+  started_at: string;
+  total_army_value: number;
+  army_value_ratio: number | null;
+  trade_efficiency: number | null;
+  trade_intensity: number | null;
+  compositions: Array<{
+    profile_id: number;
+    phase: string;
+    composition: Record<string, number>;
+    tier_state: Record<string, number> | null;
+    army_value: number | null;
+  }>;
+  losses: Array<{
+    profile_id: number;
+    line_key: string;
+    units_lost: number;
+    value_lost: number;
+  }>;
+}
+
+export interface GlobalBattlesResponse {
+  battles: GlobalBattle[];
+  total: number;
+  classifications: Record<string, string>;
+  costs: Record<string, number>;
+}
+export interface BattleSearchFilters {
+  civ1?: string;
+  civ2?: string;
+  severity?: string;
+  vod?: boolean;
+}
+
+export async function fetchGlobalBattles(
+  filters: BattleSearchFilters = {}
+): Promise<GlobalBattlesResponse> {
+  const params = new URLSearchParams();
+  if (filters.civ1) params.set('civ1', filters.civ1);
+  if (filters.civ2) params.set('civ2', filters.civ2);
+  if (filters.severity) params.set('severity', filters.severity);
+  if (filters.vod) params.set('vod', '1');
+  const qs = params.toString();
+  return fetchJson<GlobalBattlesResponse>(`/api/battles${qs ? '?' + qs : ''}`);
+}

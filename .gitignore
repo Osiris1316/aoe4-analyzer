@@ -9,3 +9,7 @@ data/local.db-shm
 packages/web/dist/
 data/*.sql
 dist/
+data/sync-to-d1-chunks/
+scripts/audit-d1-*.ts
+scripts/check-local-counts.cjs
+scripts/sync-to-d1.ts

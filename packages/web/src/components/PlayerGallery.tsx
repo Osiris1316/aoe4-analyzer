@@ -13,9 +13,10 @@
 
 import { useState, useEffect } from 'react';
 import { api, type Player } from '../api/client';
+import { useNavigate } from 'react-router-dom';
 
 interface Props {
-  onSelectPlayer: (profileId: number, name: string) => void;
+  onSelectPlayer?: (profileId: number, name: string) => void;
 }
 
 export function PlayerGallery({ onSelectPlayer }: Props) {
@@ -29,6 +30,7 @@ export function PlayerGallery({ onSelectPlayer }: Props) {
   const [players, setPlayers] = useState<Player[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
   // ── Fetch players on mount ───────────────────────────────────────
   //
@@ -77,7 +79,13 @@ export function PlayerGallery({ onSelectPlayer }: Props) {
             <div
               key={player.profile_id}
               className="card player-card"
-              onClick={() => onSelectPlayer(player.profile_id, player.name)}
+              onClick={() => {
+                if (onSelectPlayer) {
+                  onSelectPlayer(player.profile_id, player.name);
+                } else {
+                  navigate(`/players/${player.profile_id}`);
+                }
+              }}
             >
               <div className="player-name">
                 {player.name}
