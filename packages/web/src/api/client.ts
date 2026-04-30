@@ -268,6 +268,12 @@ export interface BattleSearchFilters {
   civ2?: string;
   severity?: string;
   vod?: boolean;
+  time_min?: number;
+  time_max?: number;
+  army_min?: number;
+  army_max?: number;
+  ratio_min?: number;
+  ratio_max?: number;
 }
 
 export async function fetchGlobalBattles(
@@ -278,6 +284,12 @@ export async function fetchGlobalBattles(
   if (filters.civ2) params.set('civ2', filters.civ2);
   if (filters.severity) params.set('severity', filters.severity);
   if (filters.vod) params.set('vod', '1');
+  if (filters.time_min !== undefined) params.set('time_min', String(filters.time_min));
+  if (filters.time_max !== undefined) params.set('time_max', String(filters.time_max));
+  if (filters.army_min !== undefined) params.set('army_min', String(filters.army_min));
+  if (filters.army_max !== undefined) params.set('army_max', String(filters.army_max));
+  if (filters.ratio_min !== undefined) params.set('ratio_min', String(filters.ratio_min));
+  if (filters.ratio_max !== undefined) params.set('ratio_max', String(filters.ratio_max));
   const qs = params.toString();
   return fetchJson<GlobalBattlesResponse>(`/api/battles${qs ? '?' + qs : ''}`);
 }

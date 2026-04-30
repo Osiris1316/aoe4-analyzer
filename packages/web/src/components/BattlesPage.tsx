@@ -46,6 +46,12 @@ export function BattlesPage() {
   const civ2 = searchParams.get('civ2') || '';
   const severity = searchParams.get('severity') || '';
   const vod = searchParams.get('vod') === '1';
+  const timeMin = searchParams.get('time_min') || '';
+  const timeMax = searchParams.get('time_max') || '';
+  const armyMin = searchParams.get('army_min') || '';
+  const armyMax = searchParams.get('army_max') || '';
+  const ratioMin = searchParams.get('ratio_min') || '';
+  const ratioMax = searchParams.get('ratio_max') || '';
 
   useEffect(() => {
     setLoading(true);
@@ -55,6 +61,12 @@ export function BattlesPage() {
       civ2: civ2 || undefined,
       severity: severity || undefined,
       vod: vod || undefined,
+      time_min: timeMin ? parseInt(timeMin, 10) : undefined,
+      time_max: timeMax ? parseInt(timeMax, 10) : undefined,
+      army_min: armyMin ? parseFloat(armyMin) : undefined,
+      army_max: armyMax ? parseFloat(armyMax) : undefined,
+      ratio_min: ratioMin ? parseFloat(ratioMin) : undefined,
+      ratio_max: ratioMax ? parseFloat(ratioMax) : undefined,
     })
       .then((data) => {
         setBattles(data.battles);
@@ -62,7 +74,7 @@ export function BattlesPage() {
         setCosts(data.costs);
       })
       .finally(() => setLoading(false));
-  }, [civ1, civ2, severity, vod]);
+  }, [civ1, civ2, severity, vod, timeMin, timeMax, armyMin, armyMax, ratioMin, ratioMax]);
 
   function updateFilter(key: string, value: string) {
     const next = new URLSearchParams(searchParams);
@@ -121,6 +133,80 @@ export function BattlesPage() {
           />
           <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>Has VOD</span>
         </label>
+
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>From (min)</span>
+          <select value={timeMin} onChange={(e) => updateFilter('time_min', e.target.value)}
+            style={{ padding: '0.4rem', borderRadius: '4px', background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
+            <option value="">Any</option>
+            {[2, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30].map((m) => (
+              <option key={m} value={String(m * 60)}>{m}:00</option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>To (min)</span>
+          <select value={timeMax} onChange={(e) => updateFilter('time_max', e.target.value)}
+            style={{ padding: '0.4rem', borderRadius: '4px', background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
+            <option value="">Any</option>
+            {[5, 8, 10, 12, 15, 20, 25, 30, 35, 40].map((m) => (
+              <option key={m} value={String(m * 60)}>{m}:00</option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Army Size</span>
+          <select
+            value={armyMin && armyMax ? `${armyMin}-${armyMax}` : ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              const next = new URLSearchParams(searchParams);
+              if (!val) {
+                next.delete('army_min');
+                next.delete('army_max');
+              } else {
+                const [min, max] = val.split('-');
+                next.set('army_min', min);
+                next.set('army_max', max);
+              }
+              setSearchParams(next);
+            }}
+            style={{ padding: '0.4rem', borderRadius: '4px', background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
+            <option value="">Any</option>
+            <option value="0-2000">Small (&lt;2k)</option>
+            <option value="2000-5000">Medium (2k–5k)</option>
+            <option value="5000-10000">Large (5k–10k)</option>
+            <option value="10000-999999">Massive (10k+)</option>
+          </select>
+        </label>
+
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Balance</span>
+          <select
+            value={ratioMin && ratioMax ? `${ratioMin}-${ratioMax}` : ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              const next = new URLSearchParams(searchParams);
+              if (!val) {
+                next.delete('ratio_min');
+                next.delete('ratio_max');
+              } else {
+                const [min, max] = val.split('-');
+                next.set('ratio_min', min);
+                next.set('ratio_max', max);
+              }
+              setSearchParams(next);
+            }}
+            style={{ padding: '0.4rem', borderRadius: '4px', background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
+            <option value="">Any</option>
+            <option value="0.8-1.0">Even (0.8–1.0)</option>
+            <option value="0.5-0.8">Lopsided (0.5–0.8)</option>
+            <option value="0-0.5">Severe mismatch (&lt;0.5)</option>
+          </select>
+        </label>
+
       </div>
 
       {!loading && battles.length === 0 && (

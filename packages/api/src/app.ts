@@ -5,6 +5,8 @@ import type { ApiReadDb } from './db';
 import { computeAliveMatrix } from '../../core/src/extraction/alive-matrix';
 import type { UnitEventsV3 } from '../../core/src/extraction/unit-events';
 
+import { buildTimeFilter, buildArmyScaleFilter, filterByForceRatio, appendFilters } from './filters/battle-filters';
+
 interface CreateAppOptions {
   db: ApiReadDb;
   allowedOrigins?: string[];
@@ -494,6 +496,37 @@ export function createApp({
       whereClause += `${connector}(b.p0_twitch_vod_url IS NOT NULL OR b.p1_twitch_vod_url IS NOT NULL)`;
     }
 
+    // Phase 7 filters: time range, army scale
+    const timeMin = c.req.query('time_min');
+    const timeMax = c.req.query('time_max');
+    const armyMin = c.req.query('army_min');
+    const armyMax = c.req.query('army_max');
+    const ratioMin = c.req.query('ratio_min');
+    const ratioMax = c.req.query('ratio_max');
+
+    const extraFilters: import('./filters/battle-filters').FilterClause[] = [];
+
+    if (timeMin || timeMax) {
+      extraFilters.push(buildTimeFilter(
+        timeMin ? parseInt(timeMin, 10) : 0,
+        timeMax ? parseInt(timeMax, 10) : 999999,
+      ));
+    }
+
+    if (armyMin || armyMax) {
+      extraFilters.push(buildArmyScaleFilter(
+        armyMin ? parseFloat(armyMin) : 0,
+        armyMax ? parseFloat(armyMax) : 999999,
+      ));
+    }
+
+    if (extraFilters.length > 0) {
+      const appended = appendFilters(whereClause, bindValues, extraFilters);
+      whereClause = appended.where;
+      bindValues.length = 0;
+      bindValues.push(...appended.params);
+    }
+
     const battleRows = await db.getMany<any>(`
       SELECT
         b.battle_id,
@@ -519,11 +552,21 @@ export function createApp({
         w0.name AS p0_name,
         w1.name AS p1_name,
         w0.rating AS p0_rating,
-        w1.rating AS p1_rating
+        w1.rating AS p1_rating,
+        cp0.army_value AS p0_army_value,
+        cp1.army_value AS p1_army_value
       FROM battles b
       JOIN games g ON g.game_id = b.game_id
       LEFT JOIN watchlist w0 ON w0.profile_id = g.p0_profile_id
       LEFT JOIN watchlist w1 ON w1.profile_id = g.p1_profile_id
+      LEFT JOIN battle_compositions cp0
+        ON cp0.battle_id = b.battle_id
+        AND cp0.profile_id = g.p0_profile_id
+        AND cp0.phase = 'pre'
+      LEFT JOIN battle_compositions cp1
+        ON cp1.battle_id = b.battle_id
+        AND cp1.profile_id = g.p1_profile_id
+        AND cp1.phase = 'pre'
       ${whereClause}
       ORDER BY g.started_at DESC, b.start_sec ASC
       LIMIT 200
@@ -604,13 +647,25 @@ export function createApp({
       p1_name: b.p1_name,
       p0_rating: b.p0_rating,
       p1_rating: b.p1_rating,
+      p0_army_value: b.p0_army_value,
+      p1_army_value: b.p1_army_value,
       compositions: compsByBattle.get(b.battle_id) ?? [],
       losses: lossesByBattle.get(b.battle_id) ?? [],
     }));
 
     const { classifications, costs } = await buildClassificationsAndCosts(db);
 
-    return c.json({ battles, classifications, costs, total: battles.length });
+    // Post-filter: force ratio (computed in JS, not SQL)
+    let filteredBattles = battles;
+    if (ratioMin || ratioMax) {
+      filteredBattles = filterByForceRatio(
+        battles,
+        ratioMin ? parseFloat(ratioMin) : 0,
+        ratioMax ? parseFloat(ratioMax) : 1,
+      );
+    }
+
+    return c.json({ battles: filteredBattles, classifications, costs, total: filteredBattles.length });
   });
 
   return app;
