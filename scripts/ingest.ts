@@ -18,6 +18,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import { ingestAllActivePlayers, ingestOnePlayer } from '../packages/core/src/ingestion/watchlist';
 import type { AnalyzerConfig } from '../packages/core/src/types/game';
+import { createSqlitePipelineDb } from '../packages/core/src/db/pipeline-db';
 
 // ─── Config defaults ────────────────────────────────────────────────
 
@@ -70,6 +71,7 @@ function cmdAdd(db: Database.Database, args: string[]): void {
 }
 
 async function cmdRun(db: Database.Database, args: string[]): Promise<void> {
+  const pipelineDb = createSqlitePipelineDb(db);
   const profileIdArg = args[0] ? parseInt(args[0], 10) : null;
 
   if (profileIdArg) {
@@ -84,12 +86,12 @@ async function cmdRun(db: Database.Database, args: string[]): Promise<void> {
     }
 
     console.log(`Ingesting games for ${player.name} (${profileIdArg})...`);
-    const result = await ingestOnePlayer(db, profileIdArg, DEFAULT_INGESTION_CONFIG);
+    const result = await ingestOnePlayer(pipelineDb, profileIdArg, DEFAULT_INGESTION_CONFIG);
     printResult(result);
   } else {
     // Ingest all active players
     console.log('Ingesting games for all active players...');
-    const result = await ingestAllActivePlayers(db, DEFAULT_INGESTION_CONFIG);
+    const result = await ingestAllActivePlayers(pipelineDb, DEFAULT_INGESTION_CONFIG);
     printResult(result);
   }
 }

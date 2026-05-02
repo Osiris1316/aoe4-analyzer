@@ -50,7 +50,7 @@ export interface ApiGameListEntry {
   average_mmr_deviation: number | null;
   ongoing: boolean;
   just_finished: boolean;
-  teams: ApiGameListTeamPlayer[][][];
+  teams: ApiGameListTeamPlayer[][];
   // teams is [[{player}], [{player}]] — array of teams, each team is array of slots,
   // each slot contains a player object
 }

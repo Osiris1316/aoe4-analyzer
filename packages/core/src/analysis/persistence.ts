@@ -1,28 +1,33 @@
 /**
  * Analysis Persistence Layer
  *
- * Writes the output of segmentGame() to the analysis tables:
+ * Two persistence modes:
+ *
+ *   persistNewAnalysis() — For the hosted pipeline (Jobs Worker).
+ *     Insert-only, uses batchRun for minimal D1 round-trips.
+ *     Caller is responsible for checking if analysis already exists
+ *     (Option C: skip-if-analyzed).
+ *
+ *   persistAnalysis() — For local re-analysis scripts.
+ *     Delete-first: removes existing analysis before inserting.
+ *     Safe for re-running with different config. Transaction-wrapped.
+ *
+ * Both write to the same tables:
  *   - battles
  *   - battle_compositions
  *   - battle_losses
  *   - inter_battle_periods
- *
- * Design:
- *   - Delete-first: existing analysis for a game is removed before inserting.
- *     This makes re-analysis with different config safe.
- *   - Transaction-wrapped: all writes succeed or none do.
- *   - Delete order respects foreign keys: children first, then parents.
- *   - Insert captures AUTOINCREMENT battle_ids to key child rows.
  */
 
-import type Database from 'better-sqlite3';
+import type { PipelineDb } from '../db/pipeline-db';
 import type { GameSegmentation } from './game-segmentation';
 
 // ── VOD URL helpers (ported from backfill-vod-urls.ts) ─────────────
 
 function parseTwitchTimestamp(vodUrl: string): number | null {
   const match = vodUrl.match(/[?&]t=(\d+)s/);
-  return match ? parseInt(match[1], 10) : null;
+  if (!match || !match[1]) return null;
+  return parseInt(match[1], 10);
 }
 
 function computeBattleVodUrl(gameVodUrl: string, battleStartSec: number): string | null {
@@ -32,96 +37,79 @@ function computeBattleVodUrl(gameVodUrl: string, battleStartSec: number): string
   return gameVodUrl.replace(/[?&]t=\d+s/, `?t=${battleTimestamp}s`);
 }
 
-// ── Public API ─────────────────────────────────────────────────────────
+// ── Types ──────────────────────────────────────────────────────────────
+
+export interface PersistResult {
+  gameId: number;
+  battlesWritten: number;
+  compositionsWritten: number;
+  lossesWritten: number;
+  periodsWritten: number;
+}
+
+// ── Check if analysis already exists ───────────────────────────────────
 
 /**
- * Persist a full game segmentation to the database.
- *
- * @param db            better-sqlite3 Database instance
- * @param segmentation  Output from segmentGame()
- * @param p0ProfileId   The profile_id of player 0 (from games.p0_profile_id)
- * @param p1ProfileId   The profile_id of player 1 (from games.p1_profile_id)
- * @returns Summary of what was written
+ * Returns true if this game already has battle analysis in the DB.
+ * Used by the hosted pipeline to implement Option C (skip-if-analyzed).
  */
-export function persistAnalysis(
-  db: Database.Database,
+export async function hasAnalysis(db: PipelineDb, gameId: number): Promise<boolean> {
+  const row = await db.getOne('SELECT 1 FROM battles WHERE game_id = ? LIMIT 1', [gameId]);
+  return row !== null;
+}
+
+// ── Hosted Pipeline: Insert-Only (no deletes, batched) ─────────────────
+
+/**
+ * Persist analysis for a game that has never been analyzed.
+ *
+ * Uses two batchRun calls:
+ *   Batch 1: INSERT all battles → returns lastRowIds
+ *   Batch 2: INSERT all compositions, losses, and periods using those IDs
+ *
+ * Two D1 round-trips per game, regardless of battle count.
+ *
+ * IMPORTANT: Caller must verify the game has no existing analysis
+ * (call hasAnalysis() first). This function does NOT delete old data.
+ */
+export async function persistNewAnalysis(
+  db: PipelineDb,
   segmentation: GameSegmentation,
   p0ProfileId: number,
   p1ProfileId: number,
-): PersistResult {
+): Promise<PersistResult> {
   const computedAt = new Date().toISOString();
   const gameId = segmentation.gameId;
 
-  // Wrap everything in a transaction — all or nothing
-  const result = db.transaction(() => {
-    // ── Step 1: Delete existing analysis for this game ────────────
-    //
-    // Order matters: children before parents (foreign key safety).
-    // First, get all existing battle_ids for this game so we can
-    // delete their child rows.
+  // ── Fetch game-level VOD URLs for battle timestamp computation ──
+  const gameVods = await db.getOne<{
+    p0_twitch_vod_url: string | null;
+    p1_twitch_vod_url: string | null;
+  }>(
+    'SELECT p0_twitch_vod_url, p1_twitch_vod_url FROM games WHERE game_id = ?',
+    [gameId]
+  );
 
-    const existingBattleIds = db
-      .prepare('SELECT battle_id FROM battles WHERE game_id = ?')
-      .all(gameId) as { battle_id: number }[];
+  const p0GameVod = gameVods?.p0_twitch_vod_url ?? null;
+  const p1GameVod = gameVods?.p1_twitch_vod_url ?? null;
 
-    if (existingBattleIds.length > 0) {
-      // Build a placeholder list: (?, ?, ?)
-      const placeholders = existingBattleIds.map(() => '?').join(', ');
-      const ids = existingBattleIds.map((r) => r.battle_id);
+  // ── Batch 1: INSERT all battles ─────────────────────────────────
+  //    We need lastRowId from each to key child rows in batch 2.
 
-      db.prepare(`DELETE FROM battle_losses WHERE battle_id IN (${placeholders})`).run(...ids);
-      db.prepare(`DELETE FROM battle_compositions WHERE battle_id IN (${placeholders})`).run(...ids);
-    }
+  const battleInsertSql = `
+    INSERT INTO battles (game_id, start_sec, end_sec, severity,
+      p0_units_lost, p1_units_lost, p0_value_lost, p1_value_lost, computed_at,
+      p0_twitch_vod_url, p1_twitch_vod_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-    db.prepare('DELETE FROM battles WHERE game_id = ?').run(gameId);
-    db.prepare('DELETE FROM inter_battle_periods WHERE game_id = ?').run(gameId);
+  const battleStatements = segmentation.battles.map((bwc) => {
+    const battle = bwc.battle;
+    const p0Losses = battle.playerLosses.get(p0ProfileId);
+    const p1Losses = battle.playerLosses.get(p1ProfileId);
 
-    // ── Fetch game-level VOD URLs for battle timestamp computation ──
-    const gameVods = db.prepare(
-      'SELECT p0_twitch_vod_url, p1_twitch_vod_url FROM games WHERE game_id = ?'
-    ).get(gameId) as { p0_twitch_vod_url: string | null; p1_twitch_vod_url: string | null } | undefined;
-
-    const p0GameVod = gameVods?.p0_twitch_vod_url ?? null;
-    const p1GameVod = gameVods?.p1_twitch_vod_url ?? null;
-
-    // ── Step 2: Insert battles and capture their auto-generated IDs ──
-
-    const insertBattle = db.prepare(`
-      INSERT INTO battles (game_id, start_sec, end_sec, severity,
-        p0_units_lost, p1_units_lost, p0_value_lost, p1_value_lost, computed_at,
-        p0_twitch_vod_url, p1_twitch_vod_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const insertComposition = db.prepare(`
-      INSERT INTO battle_compositions
-        (battle_id, profile_id, phase, composition, tier_state, army_value, computed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const insertLoss = db.prepare(`
-      INSERT INTO battle_losses (battle_id, profile_id, line_key, units_lost, value_lost)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-
-    const insertPeriod = db.prepare(`
-      INSERT INTO inter_battle_periods
-        (game_id, start_sec, end_sec, p0_units_produced, p1_units_produced, computed_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-
-    let battlesWritten = 0;
-    let compositionsWritten = 0;
-    let lossesWritten = 0;
-
-    for (const bwc of segmentation.battles) {
-      const battle = bwc.battle;
-
-      // Get per-player losses, falling back to 0 if a player had no losses
-      const p0Losses = battle.playerLosses.get(p0ProfileId);
-      const p1Losses = battle.playerLosses.get(p1ProfileId);
-
-      const info = insertBattle.run(
+    return {
+      sql: battleInsertSql,
+      params: [
         gameId,
         battle.startSec,
         battle.endSec,
@@ -133,72 +121,157 @@ export function persistAnalysis(
         computedAt,
         p0GameVod ? computeBattleVodUrl(p0GameVod, battle.startSec) : null,
         p1GameVod ? computeBattleVodUrl(p1GameVod, battle.startSec) : null,
-      );
+      ] as unknown[],
+    };
+  });
 
-      // Capture the auto-incremented battle_id
-      const battleId = Number(info.lastInsertRowid);
-      battlesWritten++;
+  // Execute batch 1 — get back one RunResult per battle with lastRowId
+  const battleResults = battleStatements.length > 0
+    ? await db.batchRun(battleStatements)
+    : [];
 
-      // ── Insert composition snapshots (pre + post × 2 players) ──
+  // ── Batch 2: INSERT all child rows using captured battle IDs ────
 
-      for (const snap of bwc.compositions) {
-        insertComposition.run(
+  const childStatements: { sql: string; params: unknown[] }[] = [];
+
+  const compSql = `
+    INSERT INTO battle_compositions
+      (battle_id, profile_id, phase, composition, tier_state, army_value, computed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`;
+
+  const lossSql = `
+    INSERT INTO battle_losses (battle_id, profile_id, line_key, units_lost, value_lost)
+    VALUES (?, ?, ?, ?, ?)`;
+
+  const periodSql = `
+    INSERT INTO inter_battle_periods
+      (game_id, start_sec, end_sec, p0_units_produced, p1_units_produced, computed_at)
+    VALUES (?, ?, ?, ?, ?, ?)`;
+
+  let compositionsWritten = 0;
+  let lossesWritten = 0;
+
+  for (let i = 0; i < segmentation.battles.length; i++) {
+    const bwc = segmentation.battles[i];
+    const battleResult = battleResults[i];
+    if (!bwc || !battleResult) continue;
+    const battleId = battleResult.lastRowId;
+
+    // Composition snapshots (pre + post × 2 players)
+    for (const snap of bwc.compositions) {
+      childStatements.push({
+        sql: compSql,
+        params: [
           battleId,
           snap.profileId,
           snap.phase,
           JSON.stringify(snap.composition),
-          null,           // tier_state — not yet implemented
+          null, // tier_state — not yet implemented
           snap.armyValue,
           computedAt,
-        );
-        compositionsWritten++;
-      }
+        ],
+      });
+      compositionsWritten++;
+    }
 
-      // ── Insert loss detail rows ─────────────────────────────────
-
-      for (const detail of battle.lossDetail) {
-        insertLoss.run(
+    // Loss detail rows
+    for (const detail of bwc.battle.lossDetail) {
+      childStatements.push({
+        sql: lossSql,
+        params: [
           battleId,
           detail.profileId,
           detail.lineKey,
           detail.unitsLost,
           detail.valueLost,
-        );
-        lossesWritten++;
-      }
+        ],
+      });
+      lossesWritten++;
     }
+  }
 
-    // ── Step 3: Insert inter-battle periods ────────────────────────
+  // Inter-battle periods
+  let periodsWritten = 0;
 
-    let periodsWritten = 0;
+  for (const period of segmentation.periods) {
+    const p0Produced = period.production.get(p0ProfileId) ?? {};
+    const p1Produced = period.production.get(p1ProfileId) ?? {};
 
-    for (const period of segmentation.periods) {
-      const p0Produced = period.production.get(p0ProfileId) ?? {};
-      const p1Produced = period.production.get(p1ProfileId) ?? {};
+    const p0Json = Object.keys(p0Produced).length > 0
+      ? JSON.stringify(p0Produced)
+      : null;
+    const p1Json = Object.keys(p1Produced).length > 0
+      ? JSON.stringify(p1Produced)
+      : null;
 
-      // Only store non-empty production as JSON; null if nothing was built
-      const p0Json = Object.keys(p0Produced).length > 0
-        ? JSON.stringify(p0Produced)
-        : null;
-      const p1Json = Object.keys(p1Produced).length > 0
-        ? JSON.stringify(p1Produced)
-        : null;
+    childStatements.push({
+      sql: periodSql,
+      params: [gameId, period.startSec, period.endSec, p0Json, p1Json, computedAt],
+    });
+    periodsWritten++;
+  }
 
-      insertPeriod.run(
-        gameId,
-        period.startSec,
-        period.endSec,
-        p0Json,
-        p1Json,
-        computedAt,
-      );
-      periodsWritten++;
-    }
+  // Execute batch 2 — all child rows in one round-trip
+  if (childStatements.length > 0) {
+    await db.batchRun(childStatements);
+  }
 
-    return { battlesWritten, compositionsWritten, lossesWritten, periodsWritten };
-  })();
+  return {
+    gameId,
+    battlesWritten: segmentation.battles.length,
+    compositionsWritten,
+    lossesWritten,
+    periodsWritten,
+  };
+}
 
-  return { gameId, ...result };
+// ── Local Scripts: Delete-First (for re-analysis) ──────────────────────
+
+/**
+ * Persist a full game segmentation, deleting any existing analysis first.
+ *
+ * Used by local scripts (e.g. `scripts/analyze.ts --all`) where re-analysis
+ * with different config needs to replace old results cleanly.
+ *
+ * Uses individual run() calls within a transaction (via batchRun)
+ * since the delete step needs dynamic IN-clauses.
+ */
+export async function persistAnalysis(
+  db: PipelineDb,
+  segmentation: GameSegmentation,
+  p0ProfileId: number,
+  p1ProfileId: number,
+): Promise<PersistResult> {
+  const computedAt = new Date().toISOString();
+  const gameId = segmentation.gameId;
+
+  // ── Step 1: Delete existing analysis for this game ────────────
+
+  const existingBattleIds = await db.getMany<{ battle_id: number }>(
+    'SELECT battle_id FROM battles WHERE game_id = ?',
+    [gameId]
+  );
+
+  if (existingBattleIds.length > 0) {
+    const placeholders = existingBattleIds.map(() => '?').join(', ');
+    const ids = existingBattleIds.map((r) => r.battle_id);
+
+    await db.run(
+      `DELETE FROM battle_losses WHERE battle_id IN (${placeholders})`,
+      ids
+    );
+    await db.run(
+      `DELETE FROM battle_compositions WHERE battle_id IN (${placeholders})`,
+      ids
+    );
+  }
+
+  await db.run('DELETE FROM battles WHERE game_id = ?', [gameId]);
+  await db.run('DELETE FROM inter_battle_periods WHERE game_id = ?', [gameId]);
+
+  // ── Step 2: Delegate to the insert-only path ──────────────────
+
+  return persistNewAnalysis(db, segmentation, p0ProfileId, p1ProfileId);
 }
 
 // ── Delete Only ────────────────────────────────────────────────────────
@@ -207,31 +280,26 @@ export function persistAnalysis(
  * Remove all analysis results for a game.
  * Useful for clearing stale data without immediately re-analyzing.
  */
-export function deleteAnalysis(db: Database.Database, gameId: number): void {
-  db.transaction(() => {
-    const existingBattleIds = db
-      .prepare('SELECT battle_id FROM battles WHERE game_id = ?')
-      .all(gameId) as { battle_id: number }[];
+export async function deleteAnalysis(db: PipelineDb, gameId: number): Promise<void> {
+  const existingBattleIds = await db.getMany<{ battle_id: number }>(
+    'SELECT battle_id FROM battles WHERE game_id = ?',
+    [gameId]
+  );
 
-    if (existingBattleIds.length > 0) {
-      const placeholders = existingBattleIds.map(() => '?').join(', ');
-      const ids = existingBattleIds.map((r) => r.battle_id);
+  if (existingBattleIds.length > 0) {
+    const placeholders = existingBattleIds.map(() => '?').join(', ');
+    const ids = existingBattleIds.map((r) => r.battle_id);
 
-      db.prepare(`DELETE FROM battle_losses WHERE battle_id IN (${placeholders})`).run(...ids);
-      db.prepare(`DELETE FROM battle_compositions WHERE battle_id IN (${placeholders})`).run(...ids);
-    }
+    await db.run(
+      `DELETE FROM battle_losses WHERE battle_id IN (${placeholders})`,
+      ids
+    );
+    await db.run(
+      `DELETE FROM battle_compositions WHERE battle_id IN (${placeholders})`,
+      ids
+    );
+  }
 
-    db.prepare('DELETE FROM battles WHERE game_id = ?').run(gameId);
-    db.prepare('DELETE FROM inter_battle_periods WHERE game_id = ?').run(gameId);
-  })();
-}
-
-// ── Types ──────────────────────────────────────────────────────────────
-
-export interface PersistResult {
-  gameId: number;
-  battlesWritten: number;
-  compositionsWritten: number;
-  lossesWritten: number;
-  periodsWritten: number;
+  await db.run('DELETE FROM battles WHERE game_id = ?', [gameId]);
+  await db.run('DELETE FROM inter_battle_periods WHERE game_id = ?', [gameId]);
 }

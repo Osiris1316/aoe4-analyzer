@@ -19,29 +19,41 @@ import {
   buildAliasIndex,
   type ResolutionIndexes,
 } from '../packages/core/src/extraction/pbgid-resolver';
+import { createSqlitePipelineDb, type PipelineDb } from '../packages/core/src/db/pipeline-db';
 
 // ── DB Setup ───────────────────────────────────────────────────────────
 
 const dbPath = path.resolve(__dirname, '..', 'data', 'local.db');
-const db = new Database(dbPath);
-db.pragma('journal_mode = WAL');
+const rawDb = new Database(dbPath);
+rawDb.pragma('journal_mode = WAL');
+
+const db = createSqlitePipelineDb(rawDb);
 
 // ── Build Resolution Indexes ───────────────────────────────────────────
 
-function loadIndexes(): ResolutionIndexes {
-  const unitRows = db.prepare(
-    `SELECT unit_id AS unitId, name AS unitName, pbgid FROM units`
-  ).all() as { unitId: string; unitName: string; pbgid: number | null }[];
+async function loadIndexes(): Promise<ResolutionIndexes> {
+  const unitRows = await db.getMany<{
+    unitId: string;
+    unitName: string;
+    pbgid: number | null;
+  }>('SELECT unit_id AS unitId, name AS unitName, pbgid FROM units');
 
-  const aliasRows = db.prepare(
+  const aliasRows = await db.getMany<{
+    observedPbgid: number;
+    canonicalCatalog: string;
+    canonicalPbgid: number | null;
+    customToken: string | null;
+  }>(
     `SELECT observed_pbgid AS observedPbgid, canonical_catalog AS canonicalCatalog,
             canonical_pbgid AS canonicalPbgid, custom_token AS customToken
      FROM pbgid_aliases`
-  ).all() as { observedPbgid: number; canonicalCatalog: string; canonicalPbgid: number | null; customToken: string | null }[];
+  );
 
-  const lineRows = db.prepare(
-    `SELECT icon_key AS iconKey, line_key AS lineKey, label FROM unit_lines`
-  ).all() as { iconKey: string; lineKey: string; label: string }[];
+  const lineRows = await db.getMany<{
+    iconKey: string;
+    lineKey: string;
+    label: string;
+  }>('SELECT icon_key AS iconKey, line_key AS lineKey, label FROM unit_lines');
 
   // Build the set of all known line_keys for bare-icon matching
   const lineKeySet = new Set(lineRows.map(r => r.lineKey));
@@ -57,14 +69,14 @@ function loadIndexes(): ResolutionIndexes {
 
 // ── Extraction ─────────────────────────────────────────────────────────
 
-function run() {
+async function run() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
   const gameFlag = args.indexOf('--game');
   const singleGameId = gameFlag !== -1 ? Number(args[gameFlag + 1]) : null;
 
   // Load resolution indexes
-  const indexes = loadIndexes();
+  const indexes = await loadIndexes();
   console.log(`Resolution indexes: ${indexes.unitById.size} units (by id), ${indexes.unitByPbgid.size} units (by pbgid), ${indexes.unitLines.size} unit lines, ${indexes.aliases.size} aliases`);
 
   // Find rows to extract
@@ -81,21 +93,17 @@ function run() {
     params.push(singleGameId);
   }
 
-  const rows = db.prepare(query).all(...params) as {
+  const rows = await db.getMany<{
     game_id: number;
     profile_id: number;
     non_eco_json: string;
-  }[];
+  }>(query, params);
 
   console.log(`Found ${rows.length} rows to extract.\n`);
-  if (rows.length === 0) return;
-
-  // Prepare update statement
-  const update = db.prepare(`
-    UPDATE game_player_data
-    SET unit_events_json = ?, computed_at = datetime('now')
-    WHERE game_id = ? AND profile_id = ?
-  `);
+  if (rows.length === 0) {
+    rawDb.close();
+    return;
+  }
 
   let extracted = 0;
   let totalUnits = 0;
@@ -146,7 +154,12 @@ function run() {
         console.log(`    ... and ${result.units.length - 3} more`);
       }
     } else {
-      update.run(JSON.stringify(result), row.game_id, row.profile_id);
+      await db.run(
+        `UPDATE game_player_data
+         SET unit_events_json = ?, computed_at = datetime('now')
+         WHERE game_id = ? AND profile_id = ?`,
+        [JSON.stringify(result), row.game_id, row.profile_id]
+      );
       extracted++;
     }
   }
@@ -159,6 +172,11 @@ function run() {
   } else {
     console.log(`Extracted ${extracted} rows (${totalUnits} unit streams, ${totalUnresolved} unresolved pbgids)`);
   }
+
+  rawDb.close();
 }
 
-run();
+run().catch(err => {
+  console.error('Fatal error:', err);
+  process.exit(1);
+});

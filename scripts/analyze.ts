@@ -20,6 +20,7 @@ import {
 } from '../packages/core/src/analysis/battle-detection';
 import { segmentGame } from '../packages/core/src/analysis/game-segmentation';
 import { persistAnalysis, type PersistResult } from '../packages/core/src/analysis/persistence';
+import { createSqlitePipelineDb, type PipelineDb } from '../packages/core/src/db/pipeline-db';
 
 const DB_PATH = './data/local.db';
 
@@ -34,21 +35,22 @@ interface GameRow {
   p1_civ: string;
 }
 
-function loadUnitEvents(db: Database.Database, gameId: number, profileId: number): UnitEventsV3 | null {
-  const row = db.prepare(
-    'SELECT unit_events_json FROM game_player_data WHERE game_id = ? AND profile_id = ?'
-  ).get(gameId, profileId) as { unit_events_json: string | null } | undefined;
+async function loadUnitEvents(db: PipelineDb, gameId: number, profileId: number): Promise<UnitEventsV3 | null> {
+  const row = await db.getOne<{ unit_events_json: string | null }>(
+    'SELECT unit_events_json FROM game_player_data WHERE game_id = ? AND profile_id = ?',
+    [gameId, profileId]
+  );
 
   if (!row?.unit_events_json) return null;
   return JSON.parse(row.unit_events_json) as UnitEventsV3;
 }
 
-function loadCostLookup(db: Database.Database): CostLookup {
-  const rows = db.prepare('SELECT unit_id, base_id, costs FROM units').all() as {
+async function loadCostLookup(db: PipelineDb): Promise<CostLookup> {
+  const rows = await db.getMany<{
     unit_id: string;
     base_id: string;
     costs: string;
-  }[];
+  }>('SELECT unit_id, base_id, costs FROM units');
   return buildCostLookup(rows);
 }
 
@@ -58,8 +60,7 @@ function loadCostLookup(db: Database.Database): CostLookup {
  * "Ready" means both players have unit_events_json populated.
  * If onlyNew is true, also excludes games that already have battles rows.
  */
-function findGames(db: Database.Database, onlyNew: boolean): GameRow[] {
-  // Games where both players have extracted unit events
+async function findGames(db: PipelineDb, onlyNew: boolean): Promise<GameRow[]> {
   let sql = `
     SELECT g.game_id, g.p0_profile_id, g.p1_profile_id, g.duration_sec, g.p0_civ, g.p1_civ
     FROM games g
@@ -72,7 +73,6 @@ function findGames(db: Database.Database, onlyNew: boolean): GameRow[] {
   `;
 
   if (onlyNew) {
-    // Exclude games that already have analysis results
     sql += `
       AND g.game_id NOT IN (SELECT DISTINCT game_id FROM battles)
     `;
@@ -80,18 +80,18 @@ function findGames(db: Database.Database, onlyNew: boolean): GameRow[] {
 
   sql += ' ORDER BY g.game_id';
 
-  return db.prepare(sql).all() as GameRow[];
+  return db.getMany<GameRow>(sql);
 }
 
 // ── Analysis Pipeline ──────────────────────────────────────────────────
 
-function analyzeGame(
-  db: Database.Database,
+async function analyzeGame(
+  db: PipelineDb,
   game: GameRow,
   costLookup: CostLookup,
-): PersistResult | null {
-  const p0Events = loadUnitEvents(db, game.game_id, game.p0_profile_id);
-  const p1Events = loadUnitEvents(db, game.game_id, game.p1_profile_id);
+): Promise<PersistResult | null> {
+  const p0Events = await loadUnitEvents(db, game.game_id, game.p0_profile_id);
+  const p1Events = await loadUnitEvents(db, game.game_id, game.p1_profile_id);
 
   if (!p0Events || !p1Events) {
     console.log(`  SKIP ${game.game_id} — missing unit events`);
@@ -108,56 +108,60 @@ function analyzeGame(
   );
 
   // Persist to database
-  const result = persistAnalysis(db, segmentation, game.p0_profile_id, game.p1_profile_id);
+  const result = await persistAnalysis(db, segmentation, game.p0_profile_id, game.p1_profile_id);
 
   return result;
 }
 
 // ── Main ───────────────────────────────────────────────────────────────
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   const forceAll = args.includes('--all');
   const gameFlag = args.indexOf('--game');
   const singleGameId = gameFlag !== -1 ? Number(args[gameFlag + 1]) : null;
 
-  const db = new Database(DB_PATH);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  const rawDb = new Database(DB_PATH);
+  rawDb.pragma('journal_mode = WAL');
+  rawDb.pragma('foreign_keys = ON');
+
+  const db = createSqlitePipelineDb(rawDb);
 
   console.log('\n=== AoE4 Analyzer — Battle Analysis ===\n');
 
   // Build cost lookup once (shared across all games)
-  const costLookup = loadCostLookup(db);
+  const costLookup = await loadCostLookup(db);
   console.log(`Cost lookup: ${costLookup.size} unit lines with costs`);
 
   // ── Single game mode ─────────────────────────────────────────────
 
   if (singleGameId) {
-    const game = db.prepare(
-      'SELECT game_id, p0_profile_id, p1_profile_id, duration_sec, p0_civ, p1_civ FROM games WHERE game_id = ?'
-    ).get(singleGameId) as GameRow | undefined;
+    const game = await db.getOne<GameRow>(
+      'SELECT game_id, p0_profile_id, p1_profile_id, duration_sec, p0_civ, p1_civ FROM games WHERE game_id = ?',
+      [singleGameId]
+    );
 
     if (!game) {
       console.error(`Game ${singleGameId} not found.`);
+      rawDb.close();
       process.exit(1);
     }
 
     console.log(`\nAnalyzing game ${game.game_id} (${game.p0_civ} vs ${game.p1_civ})...`);
-    const result = analyzeGame(db, game, costLookup);
+    const result = await analyzeGame(db, game, costLookup);
 
     if (result) {
       printResult(result);
     }
 
-    db.close();
+    rawDb.close();
     return;
   }
 
   // ── Batch mode ───────────────────────────────────────────────────
 
   const onlyNew = !forceAll;
-  const games = findGames(db, onlyNew);
+  const games = await findGames(db, onlyNew);
 
   if (games.length === 0) {
     if (onlyNew) {
@@ -165,7 +169,7 @@ function main() {
     } else {
       console.log('No games with extracted unit events found. Run extract first.');
     }
-    db.close();
+    rawDb.close();
     return;
   }
 
@@ -184,7 +188,7 @@ function main() {
       `  ${game.game_id} (${game.p0_civ} vs ${game.p1_civ}, ${durationMin}:${durationSec.toString().padStart(2, '0')}) → `
     );
 
-    const result = analyzeGame(db, game, costLookup);
+    const result = await analyzeGame(db, game, costLookup);
 
     if (!result) {
       skipped++;
@@ -216,7 +220,7 @@ function main() {
   console.log(`  Avg battles/game:   ${analyzed > 0 ? (totalBattles / analyzed).toFixed(1) : 0}`);
   console.log('\nDone.');
 
-  db.close();
+  rawDb.close();
 }
 
 function printResult(result: PersistResult) {
@@ -226,4 +230,7 @@ function printResult(result: PersistResult) {
   console.log(`  Periods:       ${result.periodsWritten}`);
 }
 
-main();
+main().catch(err => {
+  console.error('Fatal error:', err);
+  process.exit(1);
+});

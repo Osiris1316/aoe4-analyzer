@@ -14,9 +14,14 @@
  *   - Opponent-fallback fetch: if summary 404s via player A, retry via player B
  *   - Failed-games table: skip games that recently failed, avoid burning API calls
  *   - Consecutive-failure early abort: if 10+ games in a row fail for a player, skip them
+ *
+ * v3 changes (Cloudflare migration):
+ *   - Swapped better-sqlite3 for PipelineDb abstraction
+ *   - All DB calls are now async (works with both local SQLite and D1)
+ *   - Zero logic changes — same SQL, same control flow
  */
 
-import type Database from 'better-sqlite3';
+import type { PipelineDb } from '../db/pipeline-db';
 import type { ApiGameListEntry, ApiSummaryPlayer } from '../types/api-responses';
 import type { AnalyzerConfig } from '../types/game';
 import { fetchRecentGames, fetchGameSummary, sleep } from './aoe4world-api';
@@ -40,8 +45,8 @@ const FAILED_RETRY_DAYS = 7;
  * Ensure the failed_fetches table exists.
  * Called once at the start of ingestion.
  */
-function ensureFailedFetchesTable(db: Database.Database): void {
-  db.exec(`
+async function ensureFailedFetchesTable(db: PipelineDb): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS failed_fetches (
       game_id        INTEGER PRIMARY KEY,
       last_attempted TEXT NOT NULL,
@@ -53,10 +58,11 @@ function ensureFailedFetchesTable(db: Database.Database): void {
 /**
  * Check if a game recently failed and should be skipped.
  */
-function isRecentlyFailed(db: Database.Database, gameId: number): boolean {
-  const row = db.prepare(
-    'SELECT last_attempted FROM failed_fetches WHERE game_id = ?'
-  ).get(gameId) as { last_attempted: string } | undefined;
+async function isRecentlyFailed(db: PipelineDb, gameId: number): Promise<boolean> {
+  const row = await db.getOne<{ last_attempted: string }>(
+    'SELECT last_attempted FROM failed_fetches WHERE game_id = ?',
+    [gameId]
+  );
 
   if (!row) return false;
 
@@ -68,11 +74,12 @@ function isRecentlyFailed(db: Database.Database, gameId: number): boolean {
 /**
  * Record a failed fetch so we don't retry it next run.
  */
-function recordFailedFetch(db: Database.Database, gameId: number, error: string): void {
-  db.prepare(`
-    INSERT OR REPLACE INTO failed_fetches (game_id, last_attempted, error)
-    VALUES (?, ?, ?)
-  `).run(gameId, new Date().toISOString(), error);
+async function recordFailedFetch(db: PipelineDb, gameId: number, error: string): Promise<void> {
+  await db.run(
+    `INSERT OR REPLACE INTO failed_fetches (game_id, last_attempted, error)
+     VALUES (?, ?, ?)`,
+    [gameId, new Date().toISOString(), error]
+  );
 }
 
 /**
@@ -123,14 +130,14 @@ async function fetchSummaryWithFallback(
  * Run ingestion for all active players in the watchlist.
  */
 export async function ingestAllActivePlayers(
-  db: Database.Database,
+  db: PipelineDb,
   config: AnalyzerConfig['ingestion']
 ): Promise<IngestionResult> {
-  ensureFailedFetchesTable(db);
+  await ensureFailedFetchesTable(db);
 
-  const players = db
-    .prepare('SELECT profile_id, name FROM watchlist WHERE active = 1')
-    .all() as { profile_id: number; name: string }[];
+  const players = await db.getMany<{ profile_id: number; name: string }>(
+    'SELECT profile_id, name FROM watchlist WHERE active = 1'
+  );
 
   const result: IngestionResult = {
     gamesInserted: 0,
@@ -153,9 +160,9 @@ export async function ingestAllActivePlayers(
       totalFetched += playerResult.gamesInserted;
 
       // Update last_fetched
-      db.prepare('UPDATE watchlist SET last_fetched = ? WHERE profile_id = ?').run(
-        new Date().toISOString(),
-        player.profile_id
+      await db.run(
+        'UPDATE watchlist SET last_fetched = ? WHERE profile_id = ?',
+        [new Date().toISOString(), player.profile_id]
       );
     } catch (err) {
       const msg = `Failed to ingest ${player.name}: ${(err as Error).message}`;
@@ -177,11 +184,11 @@ export async function ingestAllActivePlayers(
  * Run ingestion for a single player.
  */
 export async function ingestOnePlayer(
-  db: Database.Database,
+  db: PipelineDb,
   profileId: number,
   config: AnalyzerConfig['ingestion']
 ): Promise<IngestionResult> {
-  ensureFailedFetchesTable(db);
+  await ensureFailedFetchesTable(db);
 
   const result: IngestionResult = {
     gamesInserted: 0,
@@ -212,15 +219,16 @@ export async function ingestOnePlayer(
     }
 
     // ── Skip recently failed games ────────────────────────────────
-    if (isRecentlyFailed(db, gameId)) {
+    if (await isRecentlyFailed(db, gameId)) {
       result.gamesSkipped++;
       continue;
     }
 
     // Check if we already have player data for this (game_id, profile_id)
-    const hasPlayerData = db
-      .prepare('SELECT 1 FROM game_player_data WHERE game_id = ? AND profile_id = ?')
-      .get(gameId, profileId);
+    const hasPlayerData = await db.getOne(
+      'SELECT 1 FROM game_player_data WHERE game_id = ? AND profile_id = ?',
+      [gameId, profileId]
+    );
 
     if (hasPlayerData) {
       result.gamesSkipped++;
@@ -229,9 +237,10 @@ export async function ingestOnePlayer(
     }
 
     // Check if we already have the game row
-    const hasGame = db
-      .prepare('SELECT 1 FROM games WHERE game_id = ?')
-      .get(gameId);
+    const hasGame = await db.getOne(
+      'SELECT 1 FROM games WHERE game_id = ?',
+      [gameId]
+    );
 
     // Get opponent profile_id from the game list for fallback fetching
     const opponentId = getOpponentProfileId(gameEntry, profileId);
@@ -250,7 +259,7 @@ export async function ingestOnePlayer(
 
         if (players.length < 2) {
           result.errors.push(`Game ${gameId}: expected 2 players, got ${players.length}`);
-          recordFailedFetch(db, gameId, `expected 2 players, got ${players.length}`);
+          await recordFailedFetch(db, gameId, `expected 2 players, got ${players.length}`);
           consecutiveFailures++;
           continue;
         }
@@ -258,9 +267,16 @@ export async function ingestOnePlayer(
         const p0 = players[0];
         const p1 = players[1];
 
+        if (!p0 || !p1) {
+          result.errors.push(`Game ${gameId}: missing player data`);
+          await recordFailedFetch(db, gameId, 'missing player data');
+          consecutiveFailures++;
+          continue;
+        }
+
         // Auto-insert any unseen players into watchlist (inactive)
-        ensureWatchlistEntry(db, p0.profileId, p0.name);
-        ensureWatchlistEntry(db, p1.profileId, p1.name);
+        await ensureWatchlistEntry(db, p0.profileId, p0.name);
+        await ensureWatchlistEntry(db, p1.profileId, p1.name);
 
         // Scrub URLs from the core blob
         const coreScrubbed = scrubUrlsDeep(gameCore);
@@ -269,8 +285,8 @@ export async function ingestOnePlayer(
         const startedAtIso = new Date(summary.startedAt * 1000).toISOString();
 
         // INSERT OR IGNORE into games
-        db.prepare(`
-          INSERT OR IGNORE INTO games (
+        await db.run(
+          `INSERT OR IGNORE INTO games (
             game_id, started_at, duration_sec, map, leaderboard, fetched_at,
             p0_profile_id, p1_profile_id,
             p0_civ, p1_civ,
@@ -278,30 +294,31 @@ export async function ingestOnePlayer(
             p0_rating, p1_rating,
             core_json,
             p0_twitch_vod_url, p1_twitch_vod_url
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          gameId,
-          startedAtIso,
-          summary.duration,
-          summary.mapName,
-          summary.leaderboard,
-          new Date().toISOString(),
-          p0.profileId,
-          p1.profileId,
-          p0.civilization,
-          p1.civilization,
-          p0.result,
-          p1.result,
-          getRatingFromGameList(gameEntry, p0.profileId),
-          getRatingFromGameList(gameEntry, p1.profileId),
-          JSON.stringify(coreScrubbed),
-          getVodUrlFromGameList(gameEntry, p0.profileId),
-          getVodUrlFromGameList(gameEntry, p1.profileId)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            gameId,
+            startedAtIso,
+            summary.duration,
+            summary.mapName,
+            summary.leaderboard,
+            new Date().toISOString(),
+            p0.profileId,
+            p1.profileId,
+            p0.civilization,
+            p1.civilization,
+            p0.result,
+            p1.result,
+            getRatingFromGameList(gameEntry, p0.profileId),
+            getRatingFromGameList(gameEntry, p1.profileId),
+            JSON.stringify(coreScrubbed),
+            getVodUrlFromGameList(gameEntry, p0.profileId),
+            getVodUrlFromGameList(gameEntry, p1.profileId),
+          ]
         );
 
         // Insert player data for BOTH players
-        insertPlayerData(db, gameId, p0, 0);
-        insertPlayerData(db, gameId, p1, 1);
+        await insertPlayerData(db, gameId, p0, 0);
+        await insertPlayerData(db, gameId, p1, 1);
 
         result.gamesInserted++;
         result.playerDataInserted += 2;
@@ -310,7 +327,7 @@ export async function ingestOnePlayer(
         const msg = `Game ${gameId}: ${(err as Error).message}`;
         console.error(`  ERROR: ${msg}`);
         result.errors.push(msg);
-        recordFailedFetch(db, gameId, (err as Error).message);
+        await recordFailedFetch(db, gameId, (err as Error).message);
         consecutiveFailures++;
         continue;
       }
@@ -335,7 +352,7 @@ export async function ingestOnePlayer(
         }
 
         const playerIndex = players.indexOf(player);
-        insertPlayerData(db, gameId, player, playerIndex);
+        await insertPlayerData(db, gameId, player, playerIndex);
         result.playerDataInserted++;
         consecutiveFailures = 0;  // Reset on success
       } catch (err) {
@@ -354,26 +371,27 @@ export async function ingestOnePlayer(
 /**
  * Insert a player's eco and non-eco data into game_player_data.
  */
-function insertPlayerData(
-  db: Database.Database,
+async function insertPlayerData(
+  db: PipelineDb,
   gameId: number,
   player: ApiSummaryPlayer,
   playerIndex: number
-): void {
+): Promise<void> {
   const { eco, nonEco } = splitPlayerEcoNonEco(player);
   const ecoScrubbed = scrubUrlsDeep(eco);
   const nonEcoScrubbed = scrubUrlsDeep(nonEco);
 
-  db.prepare(`
-    INSERT OR IGNORE INTO game_player_data (
+  await db.run(
+    `INSERT OR IGNORE INTO game_player_data (
       game_id, profile_id, player_index, eco_json, non_eco_json
-    ) VALUES (?, ?, ?, ?, ?)
-  `).run(
-    gameId,
-    player.profileId,
-    playerIndex,
-    JSON.stringify(ecoScrubbed),
-    JSON.stringify(nonEcoScrubbed)
+    ) VALUES (?, ?, ?, ?, ?)`,
+    [
+      gameId,
+      player.profileId,
+      playerIndex,
+      JSON.stringify(ecoScrubbed),
+      JSON.stringify(nonEcoScrubbed),
+    ]
   );
 }
 
@@ -381,15 +399,16 @@ function insertPlayerData(
  * Ensure a profile_id exists in the watchlist.
  * If it doesn't, insert it as inactive (active=0, is_pro=0).
  */
-function ensureWatchlistEntry(
-  db: Database.Database,
+async function ensureWatchlistEntry(
+  db: PipelineDb,
   profileId: number,
   name: string
-): void {
-  db.prepare(`
-    INSERT OR IGNORE INTO watchlist (profile_id, name, is_pro, active)
-    VALUES (?, ?, 0, 0)
-  `).run(profileId, name);
+): Promise<void> {
+  await db.run(
+    `INSERT OR IGNORE INTO watchlist (profile_id, name, is_pro, active)
+     VALUES (?, ?, 0, 0)`,
+    [profileId, name]
+  );
 }
 
 /**
