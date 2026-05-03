@@ -467,119 +467,140 @@ export function createApp({
   });
 
 // ── Global Battles Search ──────────────────────────────────────────
-
+ 
   app.get('/api/battles', async (c) => {
     const civ1 = c.req.query('civ1');
     const civ2 = c.req.query('civ2');
     const severityFilter = c.req.query('severity');
-
-    let whereClause = '';
-    const bindValues: (string | number)[] = [];
-
-    if (civ1 && civ2) {
-      whereClause = 'WHERE ((g.p0_civ = ? AND g.p1_civ = ?) OR (g.p0_civ = ? AND g.p1_civ = ?))';
-      bindValues.push(civ1, civ2, civ2, civ1);
-    } else if (civ1) {
-      whereClause = 'WHERE (g.p0_civ = ? OR g.p1_civ = ?)';
-      bindValues.push(civ1, civ1);
-    }
-
-    if (severityFilter) {
-      const connector = whereClause ? ' AND ' : 'WHERE ';
-      whereClause += `${connector}b.severity = ?`;
-      bindValues.push(severityFilter);
-    }
-
     const vodOnly = c.req.query('vod');
-    if (vodOnly === '1') {
-      const connector = whereClause ? ' AND ' : 'WHERE ';
-      whereClause += `${connector}(b.p0_twitch_vod_url IS NOT NULL OR b.p1_twitch_vod_url IS NOT NULL)`;
-    }
-
-    // Phase 7 filters: time range, army scale
     const timeMin = c.req.query('time_min');
     const timeMax = c.req.query('time_max');
     const armyMin = c.req.query('army_min');
     const armyMax = c.req.query('army_max');
     const ratioMin = c.req.query('ratio_min');
     const ratioMax = c.req.query('ratio_max');
-
-    const extraFilters: import('./filters/battle-filters').FilterClause[] = [];
-
-    if (timeMin || timeMax) {
-      extraFilters.push(buildTimeFilter(
-        timeMin ? parseInt(timeMin, 10) : 0,
-        timeMax ? parseInt(timeMax, 10) : 999999,
-      ));
+ 
+    // Build WHERE clause — all filters against battle_search (single table)
+    const conditions: string[] = [];
+    const bindValues: (string | number)[] = [];
+ 
+    if (civ1 && civ2) {
+      // Two civs selected: use pre-computed matchup column (single index hit)
+      const matchup = [civ1, civ2].sort().join('_vs_');
+      conditions.push('bs.matchup = ?');
+      bindValues.push(matchup);
+    } else if (civ1) {
+      // One civ selected: check both sides
+      conditions.push('(bs.p0_civ = ? OR bs.p1_civ = ?)');
+      bindValues.push(civ1, civ1);
     }
-
-    if (armyMin || armyMax) {
-      extraFilters.push(buildArmyScaleFilter(
-        armyMin ? parseFloat(armyMin) : 0,
-        armyMax ? parseFloat(armyMax) : 999999,
-      ));
+ 
+    if (severityFilter) {
+      conditions.push('bs.severity = ?');
+      bindValues.push(severityFilter);
     }
-
-    if (extraFilters.length > 0) {
-      const appended = appendFilters(whereClause, bindValues, extraFilters);
-      whereClause = appended.where;
-      bindValues.length = 0;
-      bindValues.push(...appended.params);
+ 
+    if (vodOnly === '1') {
+      conditions.push('bs.has_vod = 1');
     }
-
+ 
+    if (timeMin) {
+      conditions.push('bs.start_sec >= ?');
+      bindValues.push(parseInt(timeMin, 10));
+    }
+    if (timeMax) {
+      conditions.push('bs.start_sec <= ?');
+      bindValues.push(parseInt(timeMax, 10));
+    }
+ 
+    if (armyMin) {
+      conditions.push('bs.total_army_value >= ?');
+      bindValues.push(parseFloat(armyMin));
+    }
+    if (armyMax) {
+      conditions.push('bs.total_army_value <= ?');
+      bindValues.push(parseFloat(armyMax));
+    }
+ 
+    // Force ratio: was a JS post-filter, now a SQL filter
+    if (ratioMin) {
+      conditions.push('bs.force_ratio >= ?');
+      bindValues.push(parseFloat(ratioMin));
+    }
+    if (ratioMax) {
+      conditions.push('bs.force_ratio <= ?');
+      bindValues.push(parseFloat(ratioMax));
+    }
+ 
+    const whereClause = conditions.length > 0
+      ? 'WHERE ' + conditions.join(' AND ')
+      : '';
+ 
+    // ── Main search: single table, no JOINs ──
     const battleRows = await db.getMany<any>(`
       SELECT
-        b.battle_id,
-        b.game_id,
-        b.start_sec,
-        b.end_sec,
-        b.duration_sec,
-        b.severity,
-        b.p0_units_lost,
-        b.p1_units_lost,
-        b.p0_value_lost,
-        b.p1_value_lost,
-        b.p0_twitch_vod_url,
-        b.p1_twitch_vod_url,
-        g.p0_civ,
-        g.p1_civ,
-        g.p0_profile_id,
-        g.p1_profile_id,
-        g.p0_result,
-        g.map,
-        g.duration_sec AS game_duration_sec,
-        g.started_at,
-        w0.name AS p0_name,
-        w1.name AS p1_name,
-        w0.rating AS p0_rating,
-        w1.rating AS p1_rating,
-        cp0.army_value AS p0_army_value,
-        cp1.army_value AS p1_army_value
-      FROM battles b
-      JOIN games g ON g.game_id = b.game_id
-      LEFT JOIN watchlist w0 ON w0.profile_id = g.p0_profile_id
-      LEFT JOIN watchlist w1 ON w1.profile_id = g.p1_profile_id
-      LEFT JOIN battle_compositions cp0
-        ON cp0.battle_id = b.battle_id
-        AND cp0.profile_id = g.p0_profile_id
-        AND cp0.phase = 'pre'
-      LEFT JOIN battle_compositions cp1
-        ON cp1.battle_id = b.battle_id
-        AND cp1.profile_id = g.p1_profile_id
-        AND cp1.phase = 'pre'
+        bs.battle_id,
+        bs.game_id,
+        bs.start_sec,
+        bs.end_sec,
+        bs.duration_sec,
+        bs.severity,
+        bs.p0_units_lost,
+        bs.p1_units_lost,
+        bs.p0_value_lost,
+        bs.p1_value_lost,
+        bs.p0_civ,
+        bs.p1_civ,
+        bs.p0_profile_id,
+        bs.p1_profile_id,
+        bs.p0_result,
+        bs.map,
+        bs.game_duration_sec,
+        bs.started_at,
+        bs.p0_rating_game AS p0_rating,
+        bs.p1_rating_game AS p1_rating,
+        bs.p0_army_value,
+        bs.p1_army_value
+      FROM battle_search bs
       ${whereClause}
-      ORDER BY g.started_at DESC, b.start_sec ASC
+      ORDER BY bs.started_at DESC, bs.start_sec ASC
       LIMIT 200
     `, bindValues);
-
+ 
     if (battleRows.length === 0) {
       return c.json({ battles: [], classifications: {}, costs: {}, total: 0 });
     }
-
-    // Fetch compositions in chunks (same pattern as player battles)
+ 
     const battleIds = battleRows.map((b: any) => b.battle_id);
     const battleIdChunks = chunkArray(battleIds, 75);
-
+ 
+    // ── Fetch player names for the final result set ──
+    const profileIds = [...new Set([
+      ...battleRows.map((b: any) => b.p0_profile_id),
+      ...battleRows.map((b: any) => b.p1_profile_id),
+    ])];
+    const profilePlaceholders = profileIds.map(() => '?').join(',');
+    const nameRows = await db.getMany<{ profile_id: number; name: string }>(
+      `SELECT profile_id, name FROM watchlist WHERE profile_id IN (${profilePlaceholders})`,
+      profileIds
+    );
+    const nameMap = new Map(nameRows.map((r) => [r.profile_id, r.name]));
+ 
+    // ── Fetch VOD URLs for the final result set ──
+    const vodPlaceholders = battleIds.map(() => '?').join(',');
+    const vodRows = await db.getMany<{
+      battle_id: number;
+      p0_twitch_vod_url: string | null;
+      p1_twitch_vod_url: string | null;
+    }>(
+      `SELECT battle_id, p0_twitch_vod_url, p1_twitch_vod_url FROM battles WHERE battle_id IN (${vodPlaceholders})`,
+      battleIds
+    );
+    const vodMap = new Map(
+      vodRows.map((r) => [r.battle_id, { p0: r.p0_twitch_vod_url, p1: r.p1_twitch_vod_url }])
+    );
+ 
+    // ── Fetch compositions in chunks (same pattern as before) ──
     const allComps: any[] = [];
     for (const chunk of battleIdChunks) {
       const placeholders = chunk.map(() => '?').join(',');
@@ -591,7 +612,7 @@ export function createApp({
       `, chunk);
       allComps.push(...rows);
     }
-
+ 
     const compsByBattle = new Map<number, any[]>();
     for (const comp of allComps) {
       if (!compsByBattle.has(comp.battle_id)) compsByBattle.set(comp.battle_id, []);
@@ -601,8 +622,8 @@ export function createApp({
         tier_state: comp.tier_state ? JSON.parse(comp.tier_state) : null,
       });
     }
-
-    // Fetch losses in chunks
+ 
+    // ── Fetch losses in chunks ──
     const allLosses: any[] = [];
     for (const chunk of battleIdChunks) {
       const placeholders = chunk.map(() => '?').join(',');
@@ -614,14 +635,14 @@ export function createApp({
       `, chunk);
       allLosses.push(...rows);
     }
-
+ 
     const lossesByBattle = new Map<number, any[]>();
     for (const loss of allLosses) {
       if (!lossesByBattle.has(loss.battle_id)) lossesByBattle.set(loss.battle_id, []);
       lossesByBattle.get(loss.battle_id)!.push(loss);
     }
-
-    // Assemble battle objects
+ 
+    // ── Assemble battle objects (same response shape as before) ──
     const battles = battleRows.map((b: any) => ({
       battle_id: b.battle_id,
       game_id: b.game_id,
@@ -633,8 +654,8 @@ export function createApp({
       p1_units_lost: b.p1_units_lost,
       p0_value_lost: b.p0_value_lost,
       p1_value_lost: b.p1_value_lost,
-      p0_twitch_vod_url: b.p0_twitch_vod_url,
-      p1_twitch_vod_url: b.p1_twitch_vod_url,
+      p0_twitch_vod_url: vodMap.get(b.battle_id)?.p0 ?? null,
+      p1_twitch_vod_url: vodMap.get(b.battle_id)?.p1 ?? null,
       p0_civ: b.p0_civ,
       p1_civ: b.p1_civ,
       p0_profile_id: b.p0_profile_id,
@@ -643,8 +664,8 @@ export function createApp({
       map: b.map,
       game_duration_sec: b.game_duration_sec,
       started_at: b.started_at,
-      p0_name: b.p0_name,
-      p1_name: b.p1_name,
+      p0_name: nameMap.get(b.p0_profile_id) ?? null,
+      p1_name: nameMap.get(b.p1_profile_id) ?? null,
       p0_rating: b.p0_rating,
       p1_rating: b.p1_rating,
       p0_army_value: b.p0_army_value,
@@ -652,20 +673,10 @@ export function createApp({
       compositions: compsByBattle.get(b.battle_id) ?? [],
       losses: lossesByBattle.get(b.battle_id) ?? [],
     }));
-
+ 
     const { classifications, costs } = await buildClassificationsAndCosts(db);
-
-    // Post-filter: force ratio (computed in JS, not SQL)
-    let filteredBattles = battles;
-    if (ratioMin || ratioMax) {
-      filteredBattles = filterByForceRatio(
-        battles,
-        ratioMin ? parseFloat(ratioMin) : 0,
-        ratioMax ? parseFloat(ratioMax) : 1,
-      );
-    }
-
-    return c.json({ battles: filteredBattles, classifications, costs, total: filteredBattles.length });
+ 
+    return c.json({ battles, classifications, costs, total: battles.length });
   });
 
   return app;
