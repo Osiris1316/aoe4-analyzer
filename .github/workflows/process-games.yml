@@ -3,15 +3,15 @@ name: Process Pending Games
 on:
   # Run every 3 hours
   schedule:
-    - cron: '30 */3 * * *'
+    - cron: '30 */2 * * *'
 
   # Manual trigger from GitHub Actions UI
   workflow_dispatch:
     inputs:
       limit:
-        description: 'Max games to process (default: 50)'
+        description: 'Max games to process (default: 40)'
         required: false
-        default: '50'
+        default: '40'
 
 jobs:
   process:
