@@ -50,7 +50,7 @@ import type { ApiGameListEntry } from '../packages/core/src/types/api-responses'
 const SLEEP_BETWEEN_FETCHES_MS = 3000;
 
 /** Default max jobs to process per run */
-const DEFAULT_LIMIT = 50;
+const DEFAULT_LIMIT = 40;
 
 /** Max retries on 429 rate limit */
 const MAX_429_RETRIES = 3;
