@@ -574,33 +574,41 @@ export function createApp({
     const battleIds = battleRows.map((b: any) => b.battle_id);
     const battleIdChunks = chunkArray(battleIds, 75);
  
-    // ── Fetch player names for the final result set ──
+    // ── Fetch player names for the final result set (chunked for D1 param limit) ──
     const profileIds = [...new Set([
       ...battleRows.map((b: any) => b.p0_profile_id),
       ...battleRows.map((b: any) => b.p1_profile_id),
     ])];
-    const profilePlaceholders = profileIds.map(() => '?').join(',');
-    const nameRows = await db.getMany<{ profile_id: number; name: string }>(
-      `SELECT profile_id, name FROM watchlist WHERE profile_id IN (${profilePlaceholders})`,
-      profileIds
-    );
-    const nameMap = new Map(nameRows.map((r) => [r.profile_id, r.name]));
+    const allNameRows: { profile_id: number; name: string }[] = [];
+    for (const chunk of chunkArray(profileIds, 75)) {
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = await db.getMany<{ profile_id: number; name: string }>(
+        `SELECT profile_id, name FROM watchlist WHERE profile_id IN (${placeholders})`,
+        chunk
+      );
+      allNameRows.push(...rows);
+    }
+    const nameMap = new Map(allNameRows.map((r) => [r.profile_id, r.name]));
  
-    // ── Fetch VOD URLs for the final result set ──
-    const vodPlaceholders = battleIds.map(() => '?').join(',');
-    const vodRows = await db.getMany<{
-      battle_id: number;
-      p0_twitch_vod_url: string | null;
-      p1_twitch_vod_url: string | null;
-    }>(
-      `SELECT battle_id, p0_twitch_vod_url, p1_twitch_vod_url FROM battles WHERE battle_id IN (${vodPlaceholders})`,
-      battleIds
-    );
+    // ── Fetch VOD URLs for the final result set (chunked for D1 param limit) ──
+    const allVodRows: { battle_id: number; p0_twitch_vod_url: string | null; p1_twitch_vod_url: string | null }[] = [];
+    for (const chunk of battleIdChunks) {
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = await db.getMany<{
+        battle_id: number;
+        p0_twitch_vod_url: string | null;
+        p1_twitch_vod_url: string | null;
+      }>(
+        `SELECT battle_id, p0_twitch_vod_url, p1_twitch_vod_url FROM battles WHERE battle_id IN (${placeholders})`,
+        chunk
+      );
+      allVodRows.push(...rows);
+    }
     const vodMap = new Map(
-      vodRows.map((r) => [r.battle_id, { p0: r.p0_twitch_vod_url, p1: r.p1_twitch_vod_url }])
+      allVodRows.map((r) => [r.battle_id, { p0: r.p0_twitch_vod_url, p1: r.p1_twitch_vod_url }])
     );
  
-    // ── Fetch compositions in chunks (same pattern as before) ──
+    // ── Fetch compositions in chunks ──
     const allComps: any[] = [];
     for (const chunk of battleIdChunks) {
       const placeholders = chunk.map(() => '?').join(',');

@@ -17,6 +17,7 @@
  *   - battle_compositions
  *   - battle_losses
  *   - inter_battle_periods
+ *   - battle_search  (denormalized search table — kept in sync on all writes)
  */
 
 import type { PipelineDb } from '../db/pipeline-db';
@@ -65,7 +66,8 @@ export async function hasAnalysis(db: PipelineDb, gameId: number): Promise<boole
  *
  * Uses two batchRun calls:
  *   Batch 1: INSERT all battles → returns lastRowIds
- *   Batch 2: INSERT all compositions, losses, and periods using those IDs
+ *   Batch 2: INSERT all compositions, losses, periods, and battle_search rows
+ *            using those IDs
  *
  * Two D1 round-trips per game, regardless of battle count.
  *
@@ -81,17 +83,31 @@ export async function persistNewAnalysis(
   const computedAt = new Date().toISOString();
   const gameId = segmentation.gameId;
 
-  // ── Fetch game-level VOD URLs for battle timestamp computation ──
-  const gameVods = await db.getOne<{
+  // ── Fetch game-level data for battle_search and VOD computation ──
+  const gameData = await db.getOne<{
     p0_twitch_vod_url: string | null;
     p1_twitch_vod_url: string | null;
+    started_at: string;
+    duration_sec: number;
+    p0_civ: string;
+    p1_civ: string;
+    p0_rating: number | null;
+    p1_rating: number | null;
+    map: string | null;
+    p0_result: string | null;
+    matchup: string;
   }>(
-    'SELECT p0_twitch_vod_url, p1_twitch_vod_url FROM games WHERE game_id = ?',
+    `SELECT p0_twitch_vod_url, p1_twitch_vod_url, started_at, duration_sec,
+       p0_civ, p1_civ, p0_rating, p1_rating, map, p0_result, matchup
+    FROM games WHERE game_id = ?`,
     [gameId]
   );
 
-  const p0GameVod = gameVods?.p0_twitch_vod_url ?? null;
-  const p1GameVod = gameVods?.p1_twitch_vod_url ?? null;
+  const p0GameVod = gameData?.p0_twitch_vod_url ?? null;
+  const p1GameVod = gameData?.p1_twitch_vod_url ?? null;
+
+  // Pre-compute has_vod — matchup comes directly from games generated column
+  const hasVod = (p0GameVod !== null || p1GameVod !== null) ? 1 : 0;
 
   // ── Batch 1: INSERT all battles ─────────────────────────────────
   //    We need lastRowId from each to key child rows in batch 2.
@@ -148,6 +164,17 @@ export async function persistNewAnalysis(
       (game_id, start_sec, end_sec, p0_units_produced, p1_units_produced, computed_at)
     VALUES (?, ?, ?, ?, ?, ?)`;
 
+  const searchSql = `
+    INSERT INTO battle_search (
+      battle_id, game_id, started_at, game_duration_sec,
+      start_sec, end_sec, duration_sec,
+      p0_civ, p1_civ, matchup,
+      p0_profile_id, p1_profile_id, p0_rating_game, p1_rating_game,
+      severity, p0_units_lost, p1_units_lost, p0_value_lost, p1_value_lost,
+      p0_army_value, p1_army_value, total_army_value, force_ratio,
+      map, p0_result, has_vod
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
   let compositionsWritten = 0;
   let lossesWritten = 0;
 
@@ -188,6 +215,52 @@ export async function persistNewAnalysis(
       });
       lossesWritten++;
     }
+
+    // battle_search row — pre-battle army values from composition snapshots
+    const preComps = bwc.compositions.filter(c => c.phase === 'pre');
+    const p0Army = preComps.find(c => c.profileId === p0ProfileId)?.armyValue ?? null;
+    const p1Army = preComps.find(c => c.profileId === p1ProfileId)?.armyValue ?? null;
+    const totalArmy = p0Army !== null && p1Army !== null ? p0Army + p1Army : null;
+    const forceRatio =
+      p0Army !== null && p1Army !== null && Math.max(p0Army, p1Army) > 0
+        ? Math.min(p0Army, p1Army) / Math.max(p0Army, p1Army)
+        : null;
+
+    const battle = bwc.battle;
+    const p0Losses = battle.playerLosses.get(p0ProfileId);
+    const p1Losses = battle.playerLosses.get(p1ProfileId);
+
+    childStatements.push({
+      sql: searchSql,
+      params: [
+        battleId,
+        gameId,
+        gameData?.started_at ?? '',
+        gameData?.duration_sec ?? 0,
+        battle.startSec,
+        battle.endSec,
+        battle.endSec - battle.startSec,
+        gameData?.p0_civ ?? '',
+        gameData?.p1_civ ?? '',
+        gameData?.matchup ?? '',
+        p0ProfileId,
+        p1ProfileId,
+        gameData?.p0_rating ?? null,
+        gameData?.p1_rating ?? null,
+        battle.severity,
+        p0Losses?.unitsLost ?? 0,
+        p1Losses?.unitsLost ?? 0,
+        p0Losses?.valueLost ?? 0,
+        p1Losses?.valueLost ?? 0,
+        p0Army,
+        p1Army,
+        totalArmy,
+        forceRatio,
+        gameData?.map ?? null,
+        gameData?.p0_result ?? null,
+        hasVod,
+      ],
+    });
   }
 
   // Inter-battle periods
@@ -268,6 +341,7 @@ export async function persistAnalysis(
 
   await db.run('DELETE FROM battles WHERE game_id = ?', [gameId]);
   await db.run('DELETE FROM inter_battle_periods WHERE game_id = ?', [gameId]);
+  await db.run('DELETE FROM battle_search WHERE game_id = ?', [gameId]);
 
   // ── Step 2: Delegate to the insert-only path ──────────────────
 
@@ -302,4 +376,5 @@ export async function deleteAnalysis(db: PipelineDb, gameId: number): Promise<vo
 
   await db.run('DELETE FROM battles WHERE game_id = ?', [gameId]);
   await db.run('DELETE FROM inter_battle_periods WHERE game_id = ?', [gameId]);
+  await db.run('DELETE FROM battle_search WHERE game_id = ?', [gameId]);
 }

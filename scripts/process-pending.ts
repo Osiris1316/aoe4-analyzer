@@ -46,11 +46,59 @@ import type { ApiGameListEntry } from '../packages/core/src/types/api-responses'
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-/** Rate limit delay between aoe4world summary fetches */
-const SLEEP_BETWEEN_FETCHES_MS = 2000;
+/** Base delay between aoe4world summary fetches */
+const SLEEP_BETWEEN_FETCHES_MS = 3000;
 
 /** Default max jobs to process per run */
 const DEFAULT_LIMIT = 50;
+
+/** Max retries on 429 rate limit */
+const MAX_429_RETRIES = 3;
+
+/** Backoff delays for 429 retries (10s, 30s, 60s) */
+const RETRY_DELAYS_MS = [10_000, 30_000, 60_000];
+
+/**
+ * If we hit this many consecutive 429s across games (not retries within
+ * a single game), assume we're fully rate-limited and stop the run.
+ * The remaining games stay pending for the next run.
+ */
+const CONSECUTIVE_429_ABORT_LIMIT = 5;
+
+// ── Fetch with 429 Retry ───────────────────────────────────────────────
+
+/**
+ * Fetch a game summary with automatic retry on 429 rate limit.
+ * Throws on non-429 errors or after exhausting retries.
+ */
+async function fetchSummaryWithRetry(
+  profileId: number,
+  gameId: number,
+): Promise<any> {
+  let lastErr: Error | null = null;
+
+  for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+    try {
+      return await fetchGameSummary(profileId, gameId);
+    } catch (err) {
+      const msg = (err as Error).message;
+
+      if (!msg.includes('429')) {
+        throw err; // Not a rate limit — propagate immediately
+      }
+
+      lastErr = err as Error;
+
+      if (attempt < MAX_429_RETRIES) {
+        const delay = RETRY_DELAYS_MS[attempt] ?? 60_000;
+        console.log(`\n    429 rate limited, waiting ${delay / 1000}s (retry ${attempt + 1}/${MAX_429_RETRIES})...`);
+        await sleep(delay);
+      }
+    }
+  }
+
+  throw lastErr ?? new Error('Rate limited after max retries');
+}
 
 // ── Game List Entry Helpers ────────────────────────────────────────────
 // These mirror the private helpers in watchlist.ts.
@@ -167,6 +215,7 @@ interface ProcessResult {
   status: 'complete' | 'failed' | 'skipped';
   battles: number;
   error?: string;
+  wasRateLimited?: boolean;
 }
 
 async function processOneGame(
@@ -188,22 +237,33 @@ async function processOneGame(
     return { gameId, status: 'skipped', battles: 0 };
   }
 
-  // ── Step 1: Fetch summary from aoe4world ────────────────────────
+  // ── Step 1: Fetch summary from aoe4world (with 429 retry) ──────
   let summary: any;
   try {
-    summary = await fetchGameSummary(p0ProfileId, gameId);
+    summary = await fetchSummaryWithRetry(p0ProfileId, gameId);
   } catch (err) {
     const msg = (err as Error).message;
+    const is429 = msg.includes('429');
+
     // Try fallback via the other player on 404
     if (msg.includes('404')) {
       try {
         await sleep(SLEEP_BETWEEN_FETCHES_MS);
-        summary = await fetchGameSummary(p1ProfileId, gameId);
+        summary = await fetchSummaryWithRetry(p1ProfileId, gameId);
       } catch (err2) {
-        return { gameId, status: 'failed', battles: 0, error: `Summary fetch failed via both players: ${(err2 as Error).message}` };
+        const msg2 = (err2 as Error).message;
+        return {
+          gameId, status: 'failed', battles: 0,
+          error: `Summary fetch failed via both players: ${msg2}`,
+          wasRateLimited: msg2.includes('429'),
+        };
       }
     } else {
-      return { gameId, status: 'failed', battles: 0, error: `Summary fetch failed: ${msg}` };
+      return {
+        gameId, status: 'failed', battles: 0,
+        error: `Summary fetch failed: ${msg}`,
+        wasRateLimited: is429,
+      };
     }
   }
 
@@ -443,8 +503,15 @@ async function main() {
   let failed = 0;
   let skipped = 0;
   let totalBattles = 0;
+  let consecutive429s = 0;
 
   for (const job of pendingJobs) {
+    // ── Abort if we're hitting sustained rate limits ────────────
+    if (consecutive429s >= CONSECUTIVE_429_ABORT_LIMIT) {
+      console.log(`\n  Aborting: ${CONSECUTIVE_429_ABORT_LIMIT} consecutive rate limits. Remaining games stay pending for next run.`);
+      break;
+    }
+
     const entry = JSON.parse(job.game_list_meta) as ApiGameListEntry;
     const players = extractPlayers(entry);
     const label = players
@@ -469,16 +536,25 @@ async function main() {
         );
         console.log('already analyzed, marked complete');
         skipped++;
+        consecutive429s = 0;
         continue;
       }
 
       if (result.status === 'failed') {
+        // On 429 failure: leave as pending so next run retries
+        if (result.wasRateLimited) {
+          console.log(`RATE LIMITED (will retry next run)`);
+          consecutive429s++;
+          continue;
+        }
+
         await db.run(
           "UPDATE pending_jobs SET status = 'failed', error = ? WHERE game_id = ?",
           [result.error ?? 'Unknown error', job.game_id],
         );
         console.log(`FAILED: ${result.error}`);
         failed++;
+        consecutive429s = 0;
         continue;
       }
 
@@ -489,6 +565,7 @@ async function main() {
       );
       totalBattles += result.battles;
       completed++;
+      consecutive429s = 0;
 
       if (result.battles === 0) {
         console.log('complete (0 battles — no significant combat)');
@@ -496,14 +573,23 @@ async function main() {
         console.log(`complete — ${result.battles} battles`);
       }
     } catch (err) {
-      // Unexpected error — mark failed and continue
       const msg = (err as Error).message;
+
+      // On unexpected 429: leave pending, don't mark failed
+      if (msg.includes('429')) {
+        console.log(`RATE LIMITED (will retry next run)`);
+        consecutive429s++;
+        continue;
+      }
+
+      // Unexpected non-429 error — mark failed and continue
       await db.run(
         "UPDATE pending_jobs SET status = 'failed', error = ? WHERE game_id = ?",
         [msg, job.game_id],
       );
       console.log(`FATAL: ${msg}`);
       failed++;
+      consecutive429s = 0;
     }
   }
 
