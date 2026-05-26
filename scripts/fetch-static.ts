@@ -517,7 +517,7 @@ async function run() {
   console.log('=== Step 2: Database ===');
   const db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  db.pragma('foreign_keys = OFF');
 
   const identityCount = populateUnitIdentity(db, allUnits);
   console.log(`  unit_identity table: ${identityCount} rows`);
@@ -569,6 +569,8 @@ async function run() {
   console.log('     npx tsx -e "const db=require(\'better-sqlite3\')(\'./data/local.db\');db.prepare(\'UPDATE game_player_data SET unit_events_json=NULL,computed_at=NULL\').run();console.log(\'Cleared.\')"');
   console.log('  2. Re-extract:');
   console.log('     npx tsx scripts/extract.ts');
+
+  db.pragma('foreign_keys = ON');
 
   db.close();
 }
