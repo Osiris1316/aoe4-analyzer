@@ -15,9 +15,14 @@ import Database from 'better-sqlite3';
 import type { UnitEventsV3 } from '../packages/core/src/extraction/unit-events';
 import {
   detectBattles,
-  buildCostLookup,
   type CostLookup,
 } from '../packages/core/src/analysis/battle-detection';
+import {
+  resolvePatchForGame,
+  buildCostLookupForPatch,
+  SQL_ALL_PATCHES,
+  SQL_PATCH_COSTS,
+} from '../packages/core/src/extraction/patch-helpers';
 import { segmentGame } from '../packages/core/src/analysis/game-segmentation';
 import { persistAnalysis, type PersistResult } from '../packages/core/src/analysis/persistence';
 import { createSqlitePipelineDb, type PipelineDb } from '../packages/core/src/db/pipeline-db';
@@ -33,6 +38,7 @@ interface GameRow {
   duration_sec: number;
   p0_civ: string;
   p1_civ: string;
+  started_at: string;
 }
 
 async function loadUnitEvents(db: PipelineDb, gameId: number, profileId: number): Promise<UnitEventsV3 | null> {
@@ -45,13 +51,12 @@ async function loadUnitEvents(db: PipelineDb, gameId: number, profileId: number)
   return JSON.parse(row.unit_events_json) as UnitEventsV3;
 }
 
-async function loadCostLookup(db: PipelineDb): Promise<CostLookup> {
+async function loadCostLookupForBuild(db: PipelineDb, buildNumber: string): Promise<CostLookup> {
   const rows = await db.getMany<{
-    unit_id: string;
     base_id: string;
     costs: string;
-  }>('SELECT unit_id, base_id, costs FROM units');
-  return buildCostLookup(rows);
+  }>(SQL_PATCH_COSTS, [buildNumber]);
+  return buildCostLookupForPatch(rows);
 }
 
 /**
@@ -62,7 +67,7 @@ async function loadCostLookup(db: PipelineDb): Promise<CostLookup> {
  */
 async function findGames(db: PipelineDb, onlyNew: boolean): Promise<GameRow[]> {
   let sql = `
-    SELECT g.game_id, g.p0_profile_id, g.p1_profile_id, g.duration_sec, g.p0_civ, g.p1_civ
+    SELECT g.game_id, g.p0_profile_id, g.p1_profile_id, g.duration_sec, g.p0_civ, g.p1_civ, g.started_at
     FROM games g
     JOIN game_player_data gpd0
       ON gpd0.game_id = g.game_id AND gpd0.profile_id = g.p0_profile_id
@@ -130,14 +135,16 @@ async function main() {
   console.log('\n=== AoE4 Analyzer — Battle Analysis ===\n');
 
   // Build cost lookup once (shared across all games)
-  const costLookup = await loadCostLookup(db);
-  console.log(`Cost lookup: ${costLookup.size} unit lines with costs`);
+  // Load patch registry and cache cost lookups per patch
+  const patches = await db.getMany<{ build_number: string; effective_at: string }>(SQL_ALL_PATCHES);
+  console.log(`Patch registry: ${patches.length} patch(es) registered`);
+  const costLookupCache = new Map<string, CostLookup>();
 
   // ── Single game mode ─────────────────────────────────────────────
 
   if (singleGameId) {
     const game = await db.getOne<GameRow>(
-      'SELECT game_id, p0_profile_id, p1_profile_id, duration_sec, p0_civ, p1_civ FROM games WHERE game_id = ?',
+      'SELECT game_id, p0_profile_id, p1_profile_id, duration_sec, p0_civ, p1_civ, started_at FROM games WHERE game_id = ?',
       [singleGameId]
     );
 
@@ -148,6 +155,16 @@ async function main() {
     }
 
     console.log(`\nAnalyzing game ${game.game_id} (${game.p0_civ} vs ${game.p1_civ})...`);
+    const buildNumber = resolvePatchForGame(game.started_at, patches);
+    if (!buildNumber) {
+      console.error(`No patch registered for game date ${game.started_at}`);
+      rawDb.close();
+      process.exit(1);
+    }
+    if (!costLookupCache.has(buildNumber)) {
+      costLookupCache.set(buildNumber, await loadCostLookupForBuild(db, buildNumber));
+    }
+    const costLookup = costLookupCache.get(buildNumber)!;
     const result = await analyzeGame(db, game, costLookup);
 
     if (result) {
@@ -188,6 +205,17 @@ async function main() {
       `  ${game.game_id} (${game.p0_civ} vs ${game.p1_civ}, ${durationMin}:${durationSec.toString().padStart(2, '0')}) → `
     );
 
+    const buildNumber = resolvePatchForGame(game.started_at, patches);
+    if (!buildNumber) {
+      console.log(`SKIP — no patch registered for ${game.started_at}`);
+      skipped++;
+      continue;
+    }
+    if (!costLookupCache.has(buildNumber)) {
+      costLookupCache.set(buildNumber, await loadCostLookupForBuild(db, buildNumber));
+      console.log(`  (loaded costs for patch ${buildNumber})`);
+    }
+    const costLookup = costLookupCache.get(buildNumber)!;
     const result = await analyzeGame(db, game, costLookup);
 
     if (!result) {

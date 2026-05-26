@@ -25,6 +25,13 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+async function getLatestBuildNumber(db: ApiReadDb): Promise<string> {
+  const row = await db.getOne<{ build_number: string }>(
+    'SELECT build_number FROM patch_registry ORDER BY effective_at DESC LIMIT 1'
+  );
+  return row?.build_number ?? '15.4.8719';
+}
+
 function classifyFromTags(tags: Set<string>): string {
   if (tags.has('worker') || tags.has('villager')) return 'economy';
   if (tags.has('trade_cart') || tags.has('trade_camel')) return 'economy';
@@ -54,7 +61,7 @@ function classifyFromTags(tags: Set<string>): string {
   return 'other';
 }
 
-async function buildClassificationsAndCosts(db: ApiReadDb): Promise<{
+async function buildClassificationsAndCosts(db: ApiReadDb, buildNumber: string): Promise<{
   classifications: Record<string, string>;
   costs: Record<string, number>;
 }> {
@@ -64,7 +71,11 @@ async function buildClassificationsAndCosts(db: ApiReadDb): Promise<{
     classes: string;
     costs: string;
   }>(
-    'SELECT unit_id, base_id, classes, costs FROM units'
+    `SELECT ui.unit_id, ui.base_id, ui.classes, ua.costs
+     FROM unit_identity ui
+     JOIN unit_attributes ua ON ui.unit_id = ua.unit_id
+     WHERE ua.build_number = ?`,
+    [buildNumber]
   );
 
   const classifications: Record<string, string> = {};
@@ -270,7 +281,8 @@ export function createApp({
       losses: lossesByBattle.get(b.battle_id) ?? [],
     }));
 
-    const { classifications, costs } = await buildClassificationsAndCosts(db);
+    const buildNumber = await getLatestBuildNumber(db);
+    const { classifications, costs } = await buildClassificationsAndCosts(db, buildNumber);
 
     return c.json({ battles, classifications, costs });
   });
@@ -453,7 +465,8 @@ export function createApp({
       return obj;
     };
 
-    const { classifications, costs } = await buildClassificationsAndCosts(db);
+    const buildNumber = await getLatestBuildNumber(db);
+    const { classifications, costs } = await buildClassificationsAndCosts(db, buildNumber);
 
     return c.json({
       game_id: gameId,
@@ -682,7 +695,8 @@ export function createApp({
       losses: lossesByBattle.get(b.battle_id) ?? [],
     }));
  
-    const { classifications, costs } = await buildClassificationsAndCosts(db);
+    const buildNumber = await getLatestBuildNumber(db);
+    const { classifications, costs } = await buildClassificationsAndCosts(db, buildNumber);
  
     return c.json({ battles, classifications, costs, total: battles.length });
   });

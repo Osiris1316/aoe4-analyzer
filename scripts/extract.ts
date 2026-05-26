@@ -36,7 +36,7 @@ async function loadIndexes(): Promise<ResolutionIndexes> {
     unitId: string;
     unitName: string;
     pbgid: number | null;
-  }>('SELECT unit_id AS unitId, name AS unitName, pbgid FROM units');
+  }>('SELECT unit_id AS unitId, name AS unitName, pbgid FROM unit_identity');
 
   const aliasRows = await db.getMany<{
     observedPbgid: number;

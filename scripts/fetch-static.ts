@@ -2,13 +2,13 @@
  * scripts/fetch-static.ts
  *
  * Fetches unit data from data.aoe4world.com and populates the static
- * reference tables: units, pbgid_aliases, unit_lines, line_upgrades.
+ * reference tables: unit_identity, unit_attributes, pbgid_aliases, unit_lines, line_upgrades.
  *
  * Usage:
- *   npx tsx scripts/fetch-static.ts              ← fetch all civs, populate tables
- *   npx tsx scripts/fetch-static.ts --skip-fetch  ← skip HTTP fetch, just reload from saved JSON
- *   npx tsx scripts/fetch-static.ts --civ english  ← fetch one civ only
- *
+ *   npx tsx scripts/fetch-static.ts --build-number 16.1.9737           ← fetch all civs, populate tables
+ *   npx tsx scripts/fetch-static.ts --build-number 16.1.9737 --skip-fetch  ← reload from saved JSON
+ *   npx tsx scripts/fetch-static.ts --build-number 16.1.9737 --civ english  ← fetch one civ only
+ * 
  * The script saves raw JSON to static/unit-data/ so you don't have to
  * re-fetch every time. Use --skip-fetch to reload from saved files.
  */
@@ -22,6 +22,7 @@ import fs from 'fs';
 const DB_PATH = path.resolve(__dirname, '..', 'data', 'local.db');
 const STATIC_DIR = path.resolve(__dirname, '..', 'static', 'unit-data');
 const FETCH_DELAY_MS = 200;
+const SNAPSHOT_DIR = path.resolve(__dirname, '..', 'static', 'unit-data-snapshots');
 
 // ── Civ Discovery ──────────────────────────────────────────────────────
 
@@ -243,13 +244,73 @@ function loadCachedCivs(civs: string[]): Map<string, Aoe4WorldUnit[]> {
 
 // ── Database Population ────────────────────────────────────────────────
 
-function populateUnitsTable(db: Database.Database, allUnits: Map<string, Aoe4WorldUnit[]>) {
+function populateUnitIdentity(db: Database.Database, allUnits: Map<string, Aoe4WorldUnit[]>) {
+  // First pass: merge civs across all civ files per unit_id
+  const civsMerge = new Map<string, Set<string>>();
+  const unitMap = new Map<string, Aoe4WorldUnit>();
+
+  for (const [, units] of allUnits) {
+    for (const u of units) {
+      if (!civsMerge.has(u.id)) {
+        civsMerge.set(u.id, new Set());
+        unitMap.set(u.id, u);
+      }
+      for (const civ of (u.civs ?? [])) {
+        civsMerge.get(u.id)!.add(civ);
+      }
+    }
+  }
+
+  // Clear and re-insert (identity data always reflects latest game state)
+  db.prepare('DELETE FROM unit_identity').run();
+
   const insert = db.prepare(`
-    INSERT OR REPLACE INTO units
-      (unit_id, base_id, name, pbgid, age, classes, display_classes,
-       costs, hitpoints, weapons, armor, civs, produced_by, icon, description)
-    VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO unit_identity
+      (unit_id, base_id, name, pbgid, age, classes, display_classes, civs, icon, unique_unit)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  let count = 0;
+
+  const insertAll = db.transaction(() => {
+    for (const [unitId, civSet] of civsMerge) {
+      const u = unitMap.get(unitId)!;
+      insert.run(
+        u.id,
+        u.baseId,
+        u.name,
+        u.pbgid ?? null,
+        u.age ?? null,
+        JSON.stringify(u.classes ?? []),
+        u.displayClasses ? JSON.stringify(u.displayClasses) : null,
+        JSON.stringify([...civSet].sort()),
+        u.icon ?? null,
+        u.unique ? 1 : null,
+      );
+      count++;
+    }
+  });
+
+  insertAll();
+  return count;
+}
+
+function populateUnitAttributes(db: Database.Database, allUnits: Map<string, Aoe4WorldUnit[]>, buildNumber: string) {
+  // Additive — do NOT delete old patch data. Only insert for this build.
+  // Check if this build already has data
+  const existing = db.prepare(
+    'SELECT COUNT(*) as n FROM unit_attributes WHERE build_number = ?'
+  ).get(buildNumber) as { n: number };
+
+  if (existing.n > 0) {
+    console.log(`  [WARN] unit_attributes already has ${existing.n} rows for build ${buildNumber}. Replacing...`);
+    db.prepare('DELETE FROM unit_attributes WHERE build_number = ?').run(buildNumber);
+  }
+
+  const insert = db.prepare(`
+    INSERT INTO unit_attributes
+      (build_number, unit_id, costs, hitpoints, weapons, armor, sight, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let count = 0;
@@ -258,26 +319,18 @@ function populateUnitsTable(db: Database.Database, allUnits: Map<string, Aoe4Wor
   const insertAll = db.transaction(() => {
     for (const [, units] of allUnits) {
       for (const u of units) {
-        // Skip duplicates (same unit may appear in multiple civ files)
         if (seenIds.has(u.id)) continue;
         seenIds.add(u.id);
 
         insert.run(
-          u.id,                                          // unit_id
-          u.baseId,                                      // base_id
-          u.name,                                        // name
-          u.pbgid ?? null,                               // pbgid
-          u.age ?? null,                                 // age
-          JSON.stringify(u.classes ?? []),                // classes
-          u.displayClasses ? JSON.stringify(u.displayClasses) : null,  // display_classes
-          JSON.stringify(u.costs ?? {}),                  // costs
-          u.hitpoints ?? null,                           // hitpoints
-          u.weapons ? JSON.stringify(u.weapons) : null,  // weapons
-          u.armor ? JSON.stringify(u.armor) : null,      // armor
-          JSON.stringify(u.civs ?? []),                   // civs
-          u.producedBy ? JSON.stringify(u.producedBy) : null,  // produced_by
-          u.icon ?? null,                                // icon
-          u.description ?? null,                         // description
+          buildNumber,
+          u.id,
+          JSON.stringify(u.costs ?? {}),
+          u.hitpoints ?? null,
+          u.weapons ? JSON.stringify(u.weapons) : null,
+          u.armor ? JSON.stringify(u.armor) : null,
+          u.sight ? JSON.stringify(u.sight) : null,
+          u.description ?? null,
         );
         count++;
       }
@@ -400,6 +453,14 @@ async function run() {
   const skipFetch = args.includes('--skip-fetch');
   const civFlag = args.indexOf('--civ');
   const singleCiv = civFlag !== -1 ? args[civFlag + 1] : null;
+  const buildFlag = args.indexOf('--build-number');
+  const buildNumber = buildFlag !== -1 ? args[buildFlag + 1] : null;
+
+  if (!buildNumber) {
+    console.error('Error: --build-number is required.');
+    console.error('Usage: npx tsx scripts/fetch-static.ts --build-number 16.1.9737');
+    process.exit(1);
+  }
 
   // Ensure static directory exists
   fs.mkdirSync(STATIC_DIR, { recursive: true });
@@ -434,6 +495,16 @@ async function run() {
   const totalUnits = [...allUnits.values()].reduce((s, u) => s + u.length, 0);
   console.log(`\nTotal: ${totalUnits} units across ${allUnits.size} civs\n`);
 
+  // Save snapshot for this build
+  if (!skipFetch) {
+    const snapshotDir = path.join(SNAPSHOT_DIR, buildNumber);
+    fs.mkdirSync(snapshotDir, { recursive: true });
+    for (const [civ, units] of allUnits) {
+      fs.writeFileSync(path.join(snapshotDir, `${civ}.json`), JSON.stringify(units, null, 2));
+    }
+    console.log(`Snapshot saved to static/unit-data-snapshots/${buildNumber}/\n`);
+  }
+
   if (totalUnits === 0) {
     console.log('No unit data fetched. Check URLs and network connectivity.');
     console.log('You can try fetching a single civ to debug:');
@@ -448,8 +519,11 @@ async function run() {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
-  const unitCount = populateUnitsTable(db, allUnits);
-  console.log(`  units table: ${unitCount} rows`);
+  const identityCount = populateUnitIdentity(db, allUnits);
+  console.log(`  unit_identity table: ${identityCount} rows`);
+
+  const attrCount = populateUnitAttributes(db, allUnits, buildNumber);
+  console.log(`  unit_attributes table: ${attrCount} rows (build ${buildNumber})`);
 
   const aliasCount = populateAliases(db);
   console.log(`  pbgid_aliases table: ${aliasCount} rows`);
@@ -464,7 +538,7 @@ async function run() {
   console.log('\n=== Step 3: Verification ===');
 
   const pbgidCoverage = db.prepare(`
-    SELECT COUNT(*) as total FROM units WHERE pbgid IS NOT NULL
+    SELECT COUNT(*) as total FROM unit_identity WHERE pbgid IS NOT NULL
   `).get() as { total: number };
   console.log(`  Units with pbgid: ${pbgidCoverage.total}`);
 
@@ -481,7 +555,7 @@ async function run() {
     // Check each unresolved pbgid against the now-populated tables
     let wouldResolve = 0;
     for (const pbgid of events.unresolvedPbgids ?? []) {
-      const inUnits = db.prepare(`SELECT 1 FROM units WHERE pbgid = ?`).get(pbgid);
+      const inUnits = db.prepare(`SELECT 1 FROM unit_identity WHERE pbgid = ?`).get(pbgid);
       const inAlias = db.prepare(`SELECT 1 FROM pbgid_aliases WHERE observed_pbgid = ?`).get(pbgid);
       if (inUnits || inAlias) wouldResolve++;
     }

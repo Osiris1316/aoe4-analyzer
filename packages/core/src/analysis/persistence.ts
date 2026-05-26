@@ -79,6 +79,7 @@ export async function persistNewAnalysis(
   segmentation: GameSegmentation,
   p0ProfileId: number,
   p1ProfileId: number,
+  buildNumber?: string,
 ): Promise<PersistResult> {
   const computedAt = new Date().toISOString();
   const gameId = segmentation.gameId;
@@ -115,8 +116,8 @@ export async function persistNewAnalysis(
   const battleInsertSql = `
     INSERT INTO battles (game_id, start_sec, end_sec, severity,
       p0_units_lost, p1_units_lost, p0_value_lost, p1_value_lost, computed_at,
-      p0_twitch_vod_url, p1_twitch_vod_url)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+      p0_twitch_vod_url, p1_twitch_vod_url, build_number_analyzed_with)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   const battleStatements = segmentation.battles.map((bwc) => {
     const battle = bwc.battle;
@@ -137,6 +138,7 @@ export async function persistNewAnalysis(
         computedAt,
         p0GameVod ? computeBattleVodUrl(p0GameVod, battle.startSec) : null,
         p1GameVod ? computeBattleVodUrl(p1GameVod, battle.startSec) : null,
+        buildNumber ?? null,
       ] as unknown[],
     };
   });
@@ -172,8 +174,8 @@ export async function persistNewAnalysis(
       p0_profile_id, p1_profile_id, p0_rating_game, p1_rating_game,
       severity, p0_units_lost, p1_units_lost, p0_value_lost, p1_value_lost,
       p0_army_value, p1_army_value, total_army_value, force_ratio,
-      map, p0_result, has_vod
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+      map, p0_result, has_vod, build_number_analyzed_with
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   let compositionsWritten = 0;
   let lossesWritten = 0;
@@ -259,6 +261,7 @@ export async function persistNewAnalysis(
         gameData?.map ?? null,
         gameData?.p0_result ?? null,
         hasVod,
+        buildNumber ?? null,
       ],
     });
   }
@@ -314,6 +317,7 @@ export async function persistAnalysis(
   segmentation: GameSegmentation,
   p0ProfileId: number,
   p1ProfileId: number,
+  buildNumber?: string,
 ): Promise<PersistResult> {
   const computedAt = new Date().toISOString();
   const gameId = segmentation.gameId;
@@ -345,7 +349,7 @@ export async function persistAnalysis(
 
   // ── Step 2: Delegate to the insert-only path ──────────────────
 
-  return persistNewAnalysis(db, segmentation, p0ProfileId, p1ProfileId);
+  return persistAnalysis(db, segmentation, p0ProfileId, p1ProfileId);
 }
 
 // ── Delete Only ────────────────────────────────────────────────────────

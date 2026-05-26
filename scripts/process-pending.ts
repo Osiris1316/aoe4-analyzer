@@ -34,9 +34,12 @@ import {
 } from '../packages/core/src/extraction/pbgid-resolver';
 import {
   detectBattles,
-  buildCostLookup,
   type CostLookup,
 } from '../packages/core/src/analysis/battle-detection';
+import {
+  resolvePatchForGame,
+  buildCostLookupForPatch,
+} from '../packages/core/src/extraction/patch-helpers';
 import { segmentGame } from '../packages/core/src/analysis/game-segmentation';
 import {
   hasAnalysis,
@@ -169,7 +172,7 @@ async function loadResolutionIndexes(db: PipelineDb): Promise<ResolutionIndexes>
     unitId: string;
     unitName: string;
     pbgid: number | null;
-  }>('SELECT unit_id AS unitId, name AS unitName, pbgid FROM units');
+  }>('SELECT unit_id AS unitId, name AS unitName, pbgid FROM unit_identity');
 
   const aliasRows = await db.getMany<{
     observedPbgid: number;
@@ -199,13 +202,12 @@ async function loadResolutionIndexes(db: PipelineDb): Promise<ResolutionIndexes>
   };
 }
 
-async function loadCostLookup(db: PipelineDb): Promise<CostLookup> {
+async function loadCostLookup(db: PipelineDb, buildNumber: string): Promise<CostLookup> {
   const rows = await db.getMany<{
-    unit_id: string;
     base_id: string;
     costs: string;
-  }>('SELECT unit_id, base_id, costs FROM units');
-  return buildCostLookup(rows);
+  }>('SELECT ui.base_id, ua.costs FROM unit_attributes ua JOIN unit_identity ui ON ua.unit_id = ui.unit_id WHERE ua.build_number = ?', [buildNumber]);
+  return buildCostLookupForPatch(rows);
 }
 
 // ── Single Game Processing ─────────────────────────────────────────────
@@ -224,6 +226,7 @@ async function processOneGame(
   gameListEntry: ApiGameListEntry,
   indexes: ResolutionIndexes,
   costLookup: CostLookup,
+  buildNumber: string,
 ): Promise<ProcessResult> {
   const players = extractPlayers(gameListEntry);
   if (!players) {
@@ -400,6 +403,7 @@ async function processOneGame(
     segmentation,
     p0.profileId,
     p1.profileId,
+    buildNumber,
   );
 
   return {
@@ -461,9 +465,12 @@ async function main() {
     `  ${indexes.unitById.size} units, ${indexes.unitLines.size} lines, ${indexes.aliases.size} aliases`,
   );
 
-  console.log('Loading cost lookup...');
-  const costLookup = await loadCostLookup(db);
-  console.log(`  ${costLookup.size} unit lines with costs`);
+  console.log('Loading patch registry...');
+  const patches = await db.getMany<{ build_number: string; effective_at: string }>(
+    'SELECT build_number, effective_at FROM patch_registry ORDER BY effective_at ASC'
+  );
+  console.log(`  ${patches.length} patch(es) registered`);
+  const costLookupCache = new Map<string, CostLookup>();
 
   // ── Fetch pending jobs ──────────────────────────────────────────
   const pendingJobs = await db.getMany<{
@@ -526,7 +533,21 @@ async function main() {
         await sleep(SLEEP_BETWEEN_FETCHES_MS);
       }
 
-      const result = await processOneGame(db, job.game_id, entry, indexes, costLookup);
+      // Resolve patch for this game
+      const gameStartedAt = entry.started_at;
+      const buildNumber = resolvePatchForGame(gameStartedAt, patches);
+      if (!buildNumber) {
+        console.log(`FAILED: no patch registered for game date ${gameStartedAt}`);
+        failed++;
+        continue;
+      }
+      if (!costLookupCache.has(buildNumber)) {
+        costLookupCache.set(buildNumber, await loadCostLookup(db, buildNumber));
+        console.log(`  (loaded costs for patch ${buildNumber})`);
+      }
+      const costLookup = costLookupCache.get(buildNumber)!;
+
+      const result = await processOneGame(db, job.game_id, entry, indexes, costLookup, buildNumber);
 
       if (result.status === 'skipped') {
         // Already analyzed — mark complete and move on
