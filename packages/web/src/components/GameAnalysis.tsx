@@ -33,10 +33,6 @@ import {
   CompositionDeltaColumns, computeGapDeltas,
 } from './EventCards';
 
-// ── Non-military units (excluded from army value) ──────────────────────
-
-const NON_MILITARY = new Set(['villager', 'scout', 'cattle', 'pilgrim', 'trader']);
-
 // ── Props ──────────────────────────────────────────────────────────────
 
 interface Props {
@@ -83,13 +79,13 @@ export function GameAnalysis({ gameId }: Props) {
       let p1Value = 0;
 
       for (const [lineKey, counts] of Object.entries(p0.matrix)) {
-        if (NON_MILITARY.has(lineKey)) continue;
+        if (getUnitCategory(lineKey, matrixData.classifications) === 'economy') continue;
         const cost = costs[lineKey] ?? 0;
         p0Value += (counts[i] ?? 0) * cost;
       }
 
       for (const [lineKey, counts] of Object.entries(p1.matrix)) {
-        if (NON_MILITARY.has(lineKey)) continue;
+        if (getUnitCategory(lineKey, matrixData.classifications) === 'economy') continue;
         const cost = costs[lineKey] ?? 0;
         p1Value += (counts[i] ?? 0) * cost;
       }
