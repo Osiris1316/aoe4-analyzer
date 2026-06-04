@@ -1,0 +1,45 @@
+name: Test Villager Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_id:
+        description: 'Game ID to analyze'
+        required: true
+        type: string
+      profile_id:
+        description: 'Player profile ID'
+        required: true
+        type: string
+      civ:
+        description: 'Player civ (optional — script tries to detect from games table)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Run villager analysis pipeline
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+        run: >
+          npx tsx scripts/test-villager-pipeline.ts
+          ${{ inputs.game_id }}
+          ${{ inputs.profile_id }}
+          ${{ inputs.civ }}
