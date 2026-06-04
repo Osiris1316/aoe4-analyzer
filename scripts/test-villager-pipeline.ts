@@ -152,6 +152,20 @@ function extractVillagerData(blob: unknown): ExtractionResult {
 
   console.log(`\n── Extraction: scanning ${entries.length} entries ──`);
 
+  // Dump full inventory for discovery
+  console.log("  Entry inventory:");
+  for (const e of entries) {
+    const constr = Array.isArray(e.constructed) ? e.constructed : [];
+    const fin = Array.isArray(e.finished) ? e.finished : [];
+    const destr = Array.isArray(e.destroyed) ? e.destroyed : [];
+    console.log(
+      `    [${e.type}] id="${e.id}" icon="${e.icon}"` +
+      (fin.length > 0 ? ` finished×${fin.length}` : "") +
+      (constr.length > 0 ? ` constructed=[${constr.join(",")}]` : "") +
+      (destr.length > 0 ? ` destroyed=[${destr.join(",")}]` : "")
+    );
+  }
+
   // ── Find villager entry ──────────────────────────────
   const villagerEntry = entries.find((e: any) => {
     const id = String(e.id || "").toLowerCase();
@@ -229,11 +243,21 @@ function extractVillagerData(blob: unknown): ExtractionResult {
     }
     tcEvents.sort((a, b) => a.timestamp_sec - b.timestamp_sec);
   } else {
-    console.log("  ⚠ No TC entry found in blob entries");
-    // List building-type entries for debugging
+    console.log("  ⚠ No TC entry found by name matching. Dumping ALL building-type entries:");
     const buildings = entries.filter((e: any) => String(e.type || "").toLowerCase() === "building");
-    const bIds = buildings.slice(0, 10).map((e: any) => e.id);
-    console.log(`  Building entries (first 10): ${bIds.join(", ")}`);
+    for (const b of buildings) {
+      const constr = b.constructed || [];
+      const destr = b.destroyed || [];
+      console.log(`    type="${b.type}" id="${b.id}" icon="${b.icon}" constructed=[${constr.join(",")}] destroyed=[${destr.join(",")}]`);
+    }
+    if (buildings.length === 0) {
+      console.log("    (no entries with type=Building found)");
+      console.log("  Dumping ALL entries for inspection:");
+      for (const e of entries) {
+        const constr = e.constructed || [];
+        console.log(`    type="${e.type}" id="${e.id}" icon="${e.icon}" constructed=[${constr.join(",")}]`);
+      }
+    }
   }
 
   return {
@@ -268,9 +292,22 @@ async function main() {
   console.log(`Game table columns: ${Object.keys(game).join(", ")}`);
 
   const durationSec = (game.duration_sec ?? game.durationSec ?? game.duration ?? 0) as number;
-  const buildNumber = (game.build_number ?? game.buildNumber ?? 0) as number;
+  let buildNumber = (game.build_number ?? game.buildNumber ?? 0) as number;
   console.log(`Duration: ${durationSec}s (${(durationSec / 60).toFixed(1)} min)`);
-  console.log(`Build number: ${buildNumber}`);
+
+  // build_number may be inside core_json
+  if (buildNumber === 0 && game.core_json) {
+    try {
+      const core = typeof game.core_json === "string" ? JSON.parse(game.core_json as string) : game.core_json;
+      buildNumber = core.build_number ?? core.buildNumber ?? core.patchId ?? core.patch ?? 0;
+      if (buildNumber) console.log(`Build number: ${buildNumber} (from core_json)`);
+      else console.log(`Build number: 0 (not found in core_json either. core_json keys: ${Object.keys(core).join(", ")})`);
+    } catch {
+      console.log("Build number: 0 (core_json parse failed)");
+    }
+  } else {
+    console.log(`Build number: ${buildNumber}`);
+  }
 
   // Try to detect civ from game row
   let civ = civOverride;
