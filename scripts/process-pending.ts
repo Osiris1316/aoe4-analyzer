@@ -406,6 +406,16 @@ async function processOneGame(
     buildNumber,
   );
 
+  // Update player_stats: refresh display_name and increment game_count
+  await db.run(
+    'UPDATE player_stats SET display_name = ?, game_count = game_count + 1 WHERE profile_id = ?',
+    [p0.name, p0.profileId],
+  );
+  await db.run(
+    'UPDATE player_stats SET display_name = ?, game_count = game_count + 1 WHERE profile_id = ?',
+    [p1.name, p1.profileId],
+  );  
+
   return {
     gameId,
     status: 'complete',

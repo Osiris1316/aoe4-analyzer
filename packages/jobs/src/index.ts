@@ -78,6 +78,7 @@ async function refreshRatings(db: D1Database): Promise<string> {
   const chunks = chunkArray(profileIds, CHUNK_SIZE);
 
   const ratingsMap = new Map<number, number>();
+  const namesMap = new Map<number, string>();
 
   for (let i = 0; i < chunks.length; i++) {
     if (i > 0) await sleep(DELAY_BETWEEN_CHUNKS_MS);
@@ -99,18 +100,27 @@ async function refreshRatings(db: D1Database): Promise<string> {
 
     for (const player of data.players) {
       ratingsMap.set(player.profile_id, player.rating);
+      namesMap.set(player.profile_id, player.name);
     }
   }
 
-  const updateStmt = db.prepare(
-    'UPDATE watchlist SET rating = ? WHERE profile_id = ?'
+  const updateWithNameStmt = db.prepare(
+    'UPDATE player_stats SET rating = ?, display_name = ? WHERE profile_id = ?'
+  );
+  const updateRatingOnlyStmt = db.prepare(
+    'UPDATE player_stats SET rating = ? WHERE profile_id = ?'
   );
 
   const batch: D1PreparedStatement[] = [];
 
   for (const profileId of profileIds) {
     const rating = ratingsMap.get(profileId) ?? null;
-    batch.push(updateStmt.bind(rating, profileId));
+    const name = namesMap.get(profileId);
+    if (name) {
+      batch.push(updateWithNameStmt.bind(rating, name, profileId));
+    } else {
+      batch.push(updateRatingOnlyStmt.bind(rating, profileId));
+    }
   }
 
   await db.batch(batch);

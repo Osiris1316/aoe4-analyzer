@@ -25,6 +25,28 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+// ── Classifications/costs cache (keyed by build number) ──
+let cachedBuildNumber: string | null = null;
+let cachedClassifications: Record<string, string> | null = null;
+let cachedCosts: Record<string, number> | null = null;
+
+async function getCachedClassificationsAndCosts(db: ApiReadDb): Promise<{
+  classifications: Record<string, string>;
+  costs: Record<string, number>;
+}> {
+  const buildNumber = await getLatestBuildNumber(db);
+
+  if (buildNumber === cachedBuildNumber && cachedClassifications && cachedCosts) {
+    return { classifications: cachedClassifications, costs: cachedCosts };
+  }
+
+  const { classifications, costs } = await buildClassificationsAndCosts(db, buildNumber);
+  cachedBuildNumber = buildNumber;
+  cachedClassifications = classifications;
+  cachedCosts = costs;
+  return { classifications, costs };
+}
+
 async function getLatestBuildNumber(db: ApiReadDb): Promise<string> {
   const row = await db.getOne<{ build_number: string }>(
     'SELECT build_number FROM patch_registry ORDER BY effective_at DESC LIMIT 1'
@@ -117,21 +139,13 @@ export function createApp({
   app.get('/api/players', async (c) => {
     const rows = await db.getMany<any>(`
       SELECT
-        w.profile_id,
-        w.name,
-        w.is_pro,
-        w.active,
-        w.last_fetched,
-        w.rating,
-        (
-          SELECT COUNT(*)
-          FROM games g
-          WHERE g.p0_profile_id = w.profile_id
-             OR g.p1_profile_id = w.profile_id
-        ) AS game_count
-      FROM watchlist w
-      WHERE w.active = 1
-      ORDER BY w.rating IS NULL, w.rating DESC, w.is_pro DESC, w.name
+        profile_id,
+        display_name AS name,
+        is_pro,
+        rating,
+        game_count
+      FROM player_stats
+      ORDER BY rating IS NULL, rating DESC, is_pro DESC, display_name
     `);
 
     return c.json(rows);
@@ -281,8 +295,7 @@ export function createApp({
       losses: lossesByBattle.get(b.battle_id) ?? [],
     }));
 
-    const buildNumber = await getLatestBuildNumber(db);
-    const { classifications, costs } = await buildClassificationsAndCosts(db, buildNumber);
+    const { classifications, costs } = await getCachedClassificationsAndCosts(db);
 
     return c.json({ battles, classifications, costs });
   });
@@ -465,8 +478,7 @@ export function createApp({
       return obj;
     };
 
-    const buildNumber = await getLatestBuildNumber(db);
-    const { classifications, costs } = await buildClassificationsAndCosts(db, buildNumber);
+    const { classifications, costs } = await getCachedClassificationsAndCosts(db);
 
     return c.json({
       game_id: gameId,
@@ -478,6 +490,22 @@ export function createApp({
       classifications,
     });
   });
+
+function parseNumberParam(value: string | undefined, options?: {
+  integer?: boolean;
+  min?: number;
+  max?: number;
+}): number | null {
+  if (value == null || value.trim() === '') return null;
+  const trimmed = value.trim();
+  if (options?.integer && !/^\d+$/.test(trimmed)) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return null;
+  if (options?.integer && !Number.isInteger(parsed)) return null;
+  if (options?.min !== undefined && parsed < options.min) return null;
+  if (options?.max !== undefined && parsed > options.max) return null;
+  return parsed;
+}
 
 // ── Global Battles Search ──────────────────────────────────────────
  
@@ -497,52 +525,59 @@ export function createApp({
     const conditions: string[] = [];
     const bindValues: (string | number)[] = [];
  
-    if (civ1 && civ2) {
-      // Two civs selected: use pre-computed matchup column (single index hit)
-      const matchup = [civ1, civ2].sort().join('_vs_');
+    // ── Civ filter (handles civ2-only edge case) ──
+    const selectedCivs = [civ1, civ2].filter((v): v is string => Boolean(v));
+    if (selectedCivs.length === 2) {
+      const matchup = [...selectedCivs].sort().join('_vs_');
       conditions.push('bs.matchup = ?');
       bindValues.push(matchup);
-    } else if (civ1) {
-      // One civ selected: check both sides
+    } else if (selectedCivs.length === 1) {
+      const civ = selectedCivs[0]!;
       conditions.push('(bs.p0_civ = ? OR bs.p1_civ = ?)');
-      bindValues.push(civ1, civ1);
+      bindValues.push(civ, civ);
     }
- 
+
     if (severityFilter) {
       conditions.push('bs.severity = ?');
       bindValues.push(severityFilter);
     }
- 
+
     if (vodOnly === '1') {
       conditions.push('bs.has_vod = 1');
     }
- 
-    if (timeMin) {
+
+    // ── Numeric range filters: skip no-op lower bounds ──
+    const parsedTimeMin = parseNumberParam(timeMin, { integer: true, min: 0 });
+    const parsedTimeMax = parseNumberParam(timeMax, { integer: true, min: 1 });
+    if (parsedTimeMin !== null && parsedTimeMin > 0) {
       conditions.push('bs.start_sec >= ?');
-      bindValues.push(parseInt(timeMin, 10));
+      bindValues.push(parsedTimeMin);
     }
-    if (timeMax) {
+    if (parsedTimeMax !== null) {
       conditions.push('bs.start_sec <= ?');
-      bindValues.push(parseInt(timeMax, 10));
+      bindValues.push(parsedTimeMax);
     }
- 
-    if (armyMin) {
+
+    const parsedArmyMin = parseNumberParam(armyMin, { min: 0 });
+    const parsedArmyMax = parseNumberParam(armyMax, { min: 1 });
+    if (parsedArmyMin !== null && parsedArmyMin > 0) {
       conditions.push('bs.total_army_value >= ?');
-      bindValues.push(parseFloat(armyMin));
+      bindValues.push(parsedArmyMin);
     }
-    if (armyMax) {
+    if (parsedArmyMax !== null) {
       conditions.push('bs.total_army_value <= ?');
-      bindValues.push(parseFloat(armyMax));
+      bindValues.push(parsedArmyMax);
     }
- 
-    // Force ratio: was a JS post-filter, now a SQL filter
-    if (ratioMin) {
+
+    const parsedRatioMin = parseNumberParam(ratioMin, { min: 0 });
+    const parsedRatioMax = parseNumberParam(ratioMax, { min: 0 });
+    if (parsedRatioMin !== null && parsedRatioMin > 0) {
       conditions.push('bs.force_ratio >= ?');
-      bindValues.push(parseFloat(ratioMin));
+      bindValues.push(parsedRatioMin);
     }
-    if (ratioMax) {
+    if (parsedRatioMax !== null && parsedRatioMax > 0) {
       conditions.push('bs.force_ratio <= ?');
-      bindValues.push(parseFloat(ratioMax));
+      bindValues.push(parsedRatioMax);
     }
  
     const whereClause = conditions.length > 0
@@ -695,8 +730,7 @@ export function createApp({
       losses: lossesByBattle.get(b.battle_id) ?? [],
     }));
  
-    const buildNumber = await getLatestBuildNumber(db);
-    const { classifications, costs } = await buildClassificationsAndCosts(db, buildNumber);
+    const { classifications, costs } = await getCachedClassificationsAndCosts(db);
  
     return c.json({ battles, classifications, costs, total: battles.length });
   });
