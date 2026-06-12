@@ -8,6 +8,7 @@
 
 import { formatTimestamp, formatUnitName, formatValue, formatCivName, severityLabel, computeValueBreakdown } from '../utils';
 import { getUnitCategory, CATEGORY_ORDER, type UnitCategory } from '../unit-categories';
+import { PlayerLink } from './PlayerLink';
 
 // ── Non-military units (excluded from calculations) ────────────────────
 
@@ -499,7 +500,7 @@ export function BattleCard({
       {hasBreakdown ? (
         <div className="ga-card-body">
           <div className="ga-card-column">
-            <div className="ga-col-name p1">{p0Name}</div>
+            <div className="ga-col-name p1"><PlayerLink profileId={p0ProfileId}>{p0Name}</PlayerLink></div>
             <div className="ga-col-total mono">{formatValue(p0Breakdown.total)} total</div>
             <div className="ga-col-split">
               <span className="ga-color-dot donut-p0-mil" />
@@ -533,7 +534,7 @@ export function BattleCard({
           </div>
 
           <div className="ga-card-column right">
-            <div className="ga-col-name p2">{p1Name}</div>
+            <div className="ga-col-name p2"><PlayerLink profileId={p1ProfileId}>{p1Name}</PlayerLink></div>
             <div className="ga-col-total mono">{formatValue(p1Breakdown.total)} total</div>
             <div className="ga-col-split">
               <span className="ga-color-dot donut-p1-mil" />
@@ -550,13 +551,13 @@ export function BattleCard({
       ) : (
         <div className="ga-event-stats">
           <div className="ga-loss p1">
-            <span className="ga-loss-label">{p0Name}</span>
+            <span className="ga-loss-label"><PlayerLink profileId={p0ProfileId}>{p0Name}</PlayerLink></span>
             <span className="mono">
               {battle.p0_units_lost} units · {formatValue(battle.p0_value_lost ?? 0)} res
             </span>
           </div>
           <div className="ga-loss p2">
-            <span className="ga-loss-label">{p1Name}</span>
+            <span className="ga-loss-label"><PlayerLink profileId={p1ProfileId}>{p1Name}</PlayerLink></span>
             <span className="mono">
               {battle.p1_units_lost} units · {formatValue(battle.p1_value_lost ?? 0)} res
             </span>

@@ -10,6 +10,12 @@
       "remote": true
     }
   ],
+  "kv_namespaces": [
+    {
+      "binding": "ACTIVE_PLAYERS",
+      "id": "ea7bb5286634449fa0bc20d902a567c0"
+    }
+  ],
   "triggers": {
     "crons": ["0 * * * *"]
   }

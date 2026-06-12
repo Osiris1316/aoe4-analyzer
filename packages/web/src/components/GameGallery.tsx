@@ -9,6 +9,7 @@
 import { useState, useEffect } from 'react';
 import { api, type GameListEntry } from '../api/client';
 import { formatDuration, formatCivName } from '../utils';
+import { PlayerLink } from './PlayerLink';
 
 interface Props {
   profileId: number;
@@ -60,9 +61,10 @@ export function GameGallery({ profileId, playerName, onSelectGame }: Props) {
 
             {/* Opponent name */}
             <div className="opponent-line">
-              vs <span className="name">{game.opponent_name}</span>
+              vs <PlayerLink profileId={game.p0_profile_id === profileId ? game.p1_profile_id : game.p0_profile_id}>
+                <span className="name">{game.opponent_name}</span>
+              </PlayerLink>
             </div>
-
             {/* Meta row: result, duration, battles, map, date */}
             <div className="game-meta">
               {game.player_result && (

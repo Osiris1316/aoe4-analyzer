@@ -32,6 +32,7 @@ import {
   DonutChart, buildEcoMilSegments, buildCategorySegments,
   CompositionDeltaColumns, computeGapDeltas,
 } from './EventCards';
+import { PlayerLink } from './PlayerLink';
 
 // ── Props ──────────────────────────────────────────────────────────────
 
@@ -174,7 +175,7 @@ export function GameAnalysis({ gameId }: Props) {
       <div className="ga-header">
         <div className="ga-matchup">
           <span className="ga-player p1">
-            <span className="ga-name">{meta.p0_name}</span>
+            <PlayerLink profileId={meta.p0_profile_id}><span className="ga-name">{meta.p0_name}</span></PlayerLink>
             <span className="ga-civ">{formatCivName(meta.p0_civ)}</span>
             {meta.p0_result === 'win' && <span className="ga-result win">W</span>}
             {meta.p0_result === 'loss' && <span className="ga-result loss">L</span>}
@@ -184,7 +185,7 @@ export function GameAnalysis({ gameId }: Props) {
             {meta.p1_result === 'win' && <span className="ga-result win">W</span>}
             {meta.p1_result === 'loss' && <span className="ga-result loss">L</span>}
             <span className="ga-civ">{formatCivName(meta.p1_civ)}</span>
-            <span className="ga-name">{meta.p1_name}</span>
+            <PlayerLink profileId={meta.p1_profile_id}><span className="ga-name">{meta.p1_name}</span></PlayerLink>
           </span>
         </div>
         <div className="ga-meta">
@@ -442,7 +443,7 @@ function PeriodCard({
 
       <div className="ga-card-body">
         <div className="ga-card-column">
-          <div className="ga-col-name p1">{meta.p0_name}</div>
+          <div className="ga-col-name p1"><PlayerLink profileId={meta.p0_profile_id}>{meta.p0_name}</PlayerLink></div>
           <div className="ga-col-total mono">{formatValue(p0Breakdown.total)} total</div>
           <div className="ga-col-split">
             <span className="ga-color-dot donut-p0-mil" />
@@ -476,7 +477,7 @@ function PeriodCard({
         </div>
 
         <div className="ga-card-column right">
-          <div className="ga-col-name p2">{meta.p1_name}</div>
+          <div className="ga-col-name p2"><PlayerLink profileId={meta.p1_profile_id}>{meta.p1_name}</PlayerLink></div><div className="ga-col-name p2">{meta.p1_name}</div>
           <div className="ga-col-total mono">{formatValue(p1Breakdown.total)} total</div>
           <div className="ga-col-split">
             <span className="ga-color-dot donut-p1-mil" />

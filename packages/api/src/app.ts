@@ -25,6 +25,11 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+// ── Player gallery cache (module-level, reset on isolate recycle) ──
+let cachedPlayers: any[] | null = null;
+let cachedPlayersAt: number = 0;
+const PLAYER_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 // ── Classifications/costs cache (keyed by build number) ──
 let cachedBuildNumber: string | null = null;
 let cachedClassifications: Record<string, string> | null = null;
@@ -137,6 +142,11 @@ export function createApp({
   app.use('/api/*', cors({ origin: allowedOrigins }));
 
   app.get('/api/players', async (c) => {
+    const now = Date.now();
+    if (cachedPlayers && (now - cachedPlayersAt) < PLAYER_CACHE_TTL_MS) {
+      return c.json(cachedPlayers);
+    }
+
     const rows = await db.getMany<any>(`
       SELECT
         profile_id,
@@ -148,6 +158,8 @@ export function createApp({
       ORDER BY rating IS NULL, rating DESC, is_pro DESC, display_name
     `);
 
+    cachedPlayers = rows;
+    cachedPlayersAt = now;
     return c.json(rows);
   });
 
@@ -169,8 +181,8 @@ export function createApp({
         g.p0_rating,
         g.p1_rating,
         CASE
-          WHEN g.p0_profile_id = ? THEN w1.name
-          ELSE w0.name
+          WHEN g.p0_profile_id = ? THEN ps1.display_name
+          ELSE ps0.display_name
         END AS opponent_name,
         CASE
           WHEN g.p0_profile_id = ? THEN g.p0_result
@@ -187,8 +199,8 @@ export function createApp({
         (SELECT COUNT(*) FROM battles b WHERE b.game_id = g.game_id) AS battle_count,
         (SELECT COUNT(*) FROM battles b WHERE b.game_id = g.game_id AND (b.p0_twitch_vod_url IS NOT NULL OR b.p1_twitch_vod_url IS NOT NULL)) AS vod_count
       FROM games g
-      LEFT JOIN watchlist w0 ON w0.profile_id = g.p0_profile_id
-      LEFT JOIN watchlist w1 ON w1.profile_id = g.p1_profile_id
+      LEFT JOIN player_stats ps0 ON ps0.profile_id = g.p0_profile_id
+      LEFT JOIN player_stats ps1 ON ps1.profile_id = g.p1_profile_id
       WHERE g.p0_profile_id = ? OR g.p1_profile_id = ?
       ORDER BY g.started_at DESC
     `, [profileId, profileId, profileId, profileId, profileId, profileId]);
@@ -198,7 +210,6 @@ export function createApp({
 
   app.get('/api/players/:profileId/battles', async (c) => {
     const profileId = Number(c.req.param('profileId'));
-
     const battleRows = await db.getMany<any>(`
       SELECT
         b.battle_id, b.game_id, b.start_sec, b.end_sec, b.duration_sec, b.severity,
@@ -210,12 +221,12 @@ export function createApp({
         g.p0_civ, g.p1_civ,
         g.p0_result, g.p1_result,
         g.p0_rating, g.p1_rating,
-        w0.name AS p0_name,
-        w1.name AS p1_name
+        ps0.display_name AS p0_name,
+        ps1.display_name AS p1_name
       FROM battles b
       JOIN games g ON g.game_id = b.game_id
-      LEFT JOIN watchlist w0 ON w0.profile_id = g.p0_profile_id
-      LEFT JOIN watchlist w1 ON w1.profile_id = g.p1_profile_id
+      LEFT JOIN player_stats ps0 ON ps0.profile_id = g.p0_profile_id
+      LEFT JOIN player_stats ps1 ON ps1.profile_id = g.p1_profile_id
       WHERE g.p0_profile_id = ? OR g.p1_profile_id = ?
       ORDER BY g.started_at DESC, b.start_sec ASC
     `, [profileId, profileId]);
@@ -302,7 +313,6 @@ export function createApp({
 
   app.get('/api/games/:gameId', async (c) => {
     const gameId = Number(c.req.param('gameId'));
-
     const game = await db.getOne<any>(`
       SELECT
         g.game_id,
@@ -318,13 +328,13 @@ export function createApp({
         g.p1_result,
         g.p0_rating,
         g.p1_rating,
-        w0.name AS p0_name,
-        w1.name AS p1_name,
-        w0.is_pro AS p0_is_pro,
-        w1.is_pro AS p1_is_pro
+        ps0.display_name AS p0_name,
+        ps1.display_name AS p1_name,
+        ps0.is_pro AS p0_is_pro,
+        ps1.is_pro AS p1_is_pro
       FROM games g
-      LEFT JOIN watchlist w0 ON w0.profile_id = g.p0_profile_id
-      LEFT JOIN watchlist w1 ON w1.profile_id = g.p1_profile_id
+      LEFT JOIN player_stats ps0 ON ps0.profile_id = g.p0_profile_id
+      LEFT JOIN player_stats ps1 ON ps1.profile_id = g.p1_profile_id
       WHERE g.game_id = ?
     `, [gameId]);
 
@@ -631,7 +641,7 @@ function parseNumberParam(value: string | undefined, options?: {
     for (const chunk of chunkArray(profileIds, 75)) {
       const placeholders = chunk.map(() => '?').join(',');
       const rows = await db.getMany<{ profile_id: number; name: string }>(
-        `SELECT profile_id, name FROM watchlist WHERE profile_id IN (${placeholders})`,
+        `SELECT profile_id, display_name AS name FROM player_stats WHERE profile_id IN (${placeholders})`,
         chunk
       );
       allNameRows.push(...rows);

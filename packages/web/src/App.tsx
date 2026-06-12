@@ -5,6 +5,7 @@ import { GameGallery } from './components/GameGallery';
 import { GameAnalysis } from './components/GameAnalysis';
 import { BattlesGallery } from './components/BattlesGallery';
 import { BattlesPage } from './components/BattlesPage';
+import { api } from './api/client';
 
 type Theme = 'dark' | 'light';
 
@@ -68,9 +69,18 @@ function PlayerGamesView() {
   const { profileId } = useParams();
   const navigate = useNavigate();
   const id = Number(profileId);
+  const [playerName, setPlayerName] = useState('');
+
+  useEffect(() => {
+    api.getPlayers().then(players => {
+      const p = players.find(pl => pl.profile_id === id);
+      if (p) setPlayerName(p.name);
+    });
+  }, [id]);
 
   return (
     <>
+      {playerName && <h2 className="player-page-name">{playerName}</h2>}
       <div className="player-tabs">
         <Link
           to={`/players/${profileId}`}
@@ -87,7 +97,7 @@ function PlayerGamesView() {
       </div>
       <GameGallery
         profileId={id}
-        playerName=""
+        playerName={playerName}
         onSelectGame={(gameId) => navigate(`/games/${gameId}`)}
       />
     </>
@@ -98,9 +108,18 @@ function PlayerBattlesView() {
   const { profileId } = useParams();
   const navigate = useNavigate();
   const id = Number(profileId);
+  const [playerName, setPlayerName] = useState('');
+
+  useEffect(() => {
+    api.getPlayers().then(players => {
+      const p = players.find(pl => pl.profile_id === id);
+      if (p) setPlayerName(p.name);
+    });
+  }, [id]);
 
   return (
     <>
+      {playerName && <h2 className="player-page-name">{playerName}</h2>}
       <div className="player-tabs">
         <Link
           to={`/players/${profileId}`}

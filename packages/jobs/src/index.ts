@@ -18,6 +18,7 @@
 
 interface Env {
   DB: D1Database;
+  ACTIVE_PLAYERS: KVNamespace;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -46,6 +47,27 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ── Active Players KV Cache ────────────────────────────────────────────
+
+async function getActivePlayerIds(kv: KVNamespace, db: D1Database): Promise<number[]> {
+  const cached = await kv.get('active_ids');
+  if (cached) {
+    return JSON.parse(cached) as number[];
+  }
+  // KV empty (first run) — bootstrap from D1
+  return await rebuildActivePlayersCache(kv, db);
+}
+
+async function rebuildActivePlayersCache(kv: KVNamespace, db: D1Database): Promise<number[]> {
+  const { results } = await db
+    .prepare('SELECT profile_id FROM watchlist WHERE active = 1')
+    .all<{ profile_id: number }>();
+  const ids = (results || []).map((r) => r.profile_id);
+  await kv.put('active_ids', JSON.stringify(ids));
+  console.log(`KV cache rebuilt: ${ids.length} active players`);
+  return ids;
+}
+
 // ── Rating Refresh ─────────────────────────────────────────────────────
 
 interface LeaderboardResponse {
@@ -65,16 +87,10 @@ interface LeaderboardResponse {
   total_count: number;
 }
 
-async function refreshRatings(db: D1Database): Promise<string> {
-  const { results: activePlayers } = await db
-    .prepare('SELECT profile_id FROM watchlist WHERE active = 1')
-    .all<{ profile_id: number }>();
-
-  if (!activePlayers || activePlayers.length === 0) {
+async function refreshRatings(db: D1Database, profileIds: number[]): Promise<string> {
+  if (profileIds.length === 0) {
     return 'No active players in watchlist';
   }
-
-  const profileIds = activePlayers.map((p) => p.profile_id);
   const chunks = chunkArray(profileIds, CHUNK_SIZE);
 
   const ratingsMap = new Map<number, number>();
@@ -145,17 +161,10 @@ async function refreshRatings(db: D1Database): Promise<string> {
  *
  * CPU cost: near zero — just fetch() and D1 reads/writes.
  */
-async function discoverNewGames(db: D1Database): Promise<string> {
-  // Step 1: Get active profile IDs
-  const { results: activePlayers } = await db
-    .prepare('SELECT profile_id FROM watchlist WHERE active = 1')
-    .all<{ profile_id: number }>();
-
-  if (!activePlayers || activePlayers.length === 0) {
+async function discoverNewGames(db: D1Database, profileIds: number[]): Promise<string> {
+  if (profileIds.length === 0) {
     return 'No active players in watchlist';
   }
-
-  const profileIds = activePlayers.map((p) => p.profile_id);
   const chunks = chunkArray(profileIds, CHUNK_SIZE);
 
   // Step 2: Fetch recent games from global endpoint
@@ -261,8 +270,18 @@ export default {
     env: Env,
     _ctx: ExecutionContext
   ): Promise<void> {
-    const ratingResult = await refreshRatings(env.DB);
-    const discoveryResult = await discoverNewGames(env.DB);
+    // Load active IDs from KV (D1 fallback if KV empty)
+    const profileIds = await getActivePlayerIds(env.ACTIVE_PLAYERS, env.DB);
+
+    const ratingResult = await refreshRatings(env.DB, profileIds);
+    const discoveryResult = await discoverNewGames(env.DB, profileIds);
+
+    // Daily self-heal: rebuild cache at midnight UTC to pick up watchlist changes
+    const hour = new Date().getUTCHours();
+    if (hour === 0) {
+      await rebuildActivePlayersCache(env.ACTIVE_PLAYERS, env.DB);
+    }
+
     console.log(`Cron complete: ${ratingResult} | ${discoveryResult}`);
   },
 
@@ -270,27 +289,37 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/run') {
-      const ratingResult = await refreshRatings(env.DB);
-      const discoveryResult = await discoverNewGames(env.DB);
+      const profileIds = await getActivePlayerIds(env.ACTIVE_PLAYERS, env.DB);
+      const ratingResult = await refreshRatings(env.DB, profileIds);
+      const discoveryResult = await discoverNewGames(env.DB, profileIds);
       return new Response(`${ratingResult}\n${discoveryResult}`, { status: 200 });
     }
 
     if (url.pathname === '/run/ratings') {
-      const result = await refreshRatings(env.DB);
+      const profileIds = await getActivePlayerIds(env.ACTIVE_PLAYERS, env.DB);
+      const result = await refreshRatings(env.DB, profileIds);
       return new Response(result, { status: 200 });
     }
 
     if (url.pathname === '/run/discover') {
-      const result = await discoverNewGames(env.DB);
+      const profileIds = await getActivePlayerIds(env.ACTIVE_PLAYERS, env.DB);
+      const result = await discoverNewGames(env.DB, profileIds);
       return new Response(result, { status: 200 });
+    }
+
+    if (url.pathname === '/rebuild-cache') {
+      const ids = await rebuildActivePlayersCache(env.ACTIVE_PLAYERS, env.DB);
+      return new Response(`KV cache rebuilt: ${ids.length} active players`, { status: 200 });
     }
 
     return new Response(
       'AoE4 Analyzer Jobs Worker.\n' +
-      'GET /run           — run all jobs\n' +
-      'GET /run/ratings   — rating refresh only\n' +
-      'GET /run/discover  — game discovery only',
+      'GET /run             — run all jobs\n' +
+      'GET /run/ratings     — rating refresh only\n' +
+      'GET /run/discover    — game discovery only\n' +
+      'GET /rebuild-cache   — rebuild active players KV cache',
       { status: 200 }
     );
+
   },
 };
