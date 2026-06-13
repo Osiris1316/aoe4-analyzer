@@ -88,6 +88,28 @@ function classifyFromTags(tags: Set<string>): string {
   return 'other';
 }
 
+function computeMilitaryAndCategories(
+  composition: Record<string, number>,
+  classifications: Record<string, string>,
+  costs: Record<string, number>,
+): { militaryValue: number; categoryValues: Record<string, number> } {
+  let militaryValue = 0;
+  const categoryValues: Record<string, number> = {};
+
+  for (const [lineKey, count] of Object.entries(composition)) {
+    const cat = classifications[lineKey] ?? 'other';
+    const cost = costs[lineKey] ?? 0;
+    const value = count * cost;
+
+    if (cat !== 'economy' && value > 0) {
+      militaryValue += value;
+      categoryValues[cat] = (categoryValues[cat] ?? 0) + value;
+    }
+  }
+
+  return { militaryValue, categoryValues };
+}
+
 async function buildClassificationsAndCosts(db: ApiReadDb, buildNumber: string): Promise<{
   classifications: Record<string, string>;
   costs: Record<string, number>;
