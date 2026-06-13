@@ -408,13 +408,21 @@ async function processOneGame(
 
   // Update player_stats: refresh display_name and increment game_count
   await db.run(
-    'UPDATE player_stats SET display_name = ?, game_count = game_count + 1 WHERE profile_id = ?',
-    [p0.name, p0.profileId],
+    `INSERT INTO player_stats (profile_id, display_name, game_count)
+    VALUES (?, ?, 1)
+    ON CONFLICT(profile_id) DO UPDATE SET
+      display_name = excluded.display_name,
+      game_count = game_count + 1`,
+    [p0.profileId, p0.name],
   );
   await db.run(
-    'UPDATE player_stats SET display_name = ?, game_count = game_count + 1 WHERE profile_id = ?',
-    [p1.name, p1.profileId],
-  );  
+    `INSERT INTO player_stats (profile_id, display_name, game_count)
+    VALUES (?, ?, 1)
+    ON CONFLICT(profile_id) DO UPDATE SET
+      display_name = excluded.display_name,
+      game_count = game_count + 1`,
+    [p1.profileId, p1.name],
+  );
 
   return {
     gameId,
