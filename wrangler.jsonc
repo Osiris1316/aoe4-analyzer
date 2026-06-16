@@ -20,5 +20,12 @@
 			"id": "ea7bb5286634449fa0bc20d902a567c0",
 			"remote": true
 		}
+	],
+	"r2_buckets": [
+		{
+			"bucket_name": "aoe4-analyzer-blobs",
+			"binding": "BLOBS",
+			"remote": true
+		}
 	]
 }
