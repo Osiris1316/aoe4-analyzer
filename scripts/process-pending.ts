@@ -45,6 +45,7 @@ import {
   hasAnalysis,
   persistNewAnalysis,
 } from '../packages/core/src/analysis/persistence';
+import { createR2Client, gpdBlobKey, type R2Client } from '../packages/core/src/storage/r2';
 import type { ApiGameListEntry } from '../packages/core/src/types/api-responses';
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -67,6 +68,9 @@ const RETRY_DELAYS_MS = [10_000, 30_000, 60_000];
  * The remaining games stay pending for the next run.
  */
 const CONSECUTIVE_429_ABORT_LIMIT = 5;
+
+/** R2 bucket holding gpd blobs (private). */
+const R2_BUCKET = 'aoe4-analyzer-blobs';
 
 // ── Fetch with 429 Retry ───────────────────────────────────────────────
 
@@ -222,6 +226,7 @@ interface ProcessResult {
 
 async function processOneGame(
   db: PipelineDb,
+  r2: R2Client,
   gameId: number,
   gameListEntry: ApiGameListEntry,
   indexes: ResolutionIndexes,
@@ -324,62 +329,78 @@ async function processOneGame(
     ],
   );
 
-  // ── Step 3: Write player data ───────────────────────────────────
+  // ── Step 3+4: per player — split, scrub, extract (in memory),
+  //   put blobs to R2, then write the D1 pointer row. ─────────────
+  //
+  // R2-first ordering (r2.put verifies and throws on failure, then we
+  // write the D1 row) — a mid-game crash leaves at worst an orphan R2
+  // object (reconcilable), never a D1 pointer to a missing object.
+  // Unit events are extracted from the in-memory non-eco blob, so the
+  // old D1 write-then-read-back round trips are gone.
+  const eventsByProfile = new Map<number, UnitEventsV3 | null>();
+
   for (const player of [p0, p1]) {
     const { eco, nonEco } = splitPlayerEcoNonEco(player);
     const ecoScrubbed = scrubUrlsDeep(eco);
-    const nonEcoScrubbed = scrubUrlsDeep(nonEco);
+    const nonEcoScrubbed = scrubUrlsDeep(nonEco) as { buildOrder?: unknown[] };
 
+    // Extract unit events from the in-memory build order (no read-back).
+    let events: UnitEventsV3 | null = null;
+    if (Array.isArray(nonEcoScrubbed.buildOrder)) {
+      events = extractUnitEventsV3(
+        nonEcoScrubbed.buildOrder as any,
+        gameId,
+        player.profileId,
+        indexes,
+      );
+    }
+    eventsByProfile.set(player.profileId, events);
+
+    // Deterministic R2 keys.
+    const ecoKey = gpdBlobKey(gameId, player.profileId, 'eco');
+    const nonEcoKey = gpdBlobKey(gameId, player.profileId, 'non-eco');
+    const unitEventsKey = events
+      ? gpdBlobKey(gameId, player.profileId, 'unit-events')
+      : null;
+
+    // R2 puts first (each verifies internally; throws on non-2xx).
+    const ecoPut = await r2.put(ecoKey, JSON.stringify(ecoScrubbed));
+    const nonEcoPut = await r2.put(nonEcoKey, JSON.stringify(nonEcoScrubbed));
+    const unitEventsPut =
+      events && unitEventsKey
+        ? await r2.put(unitEventsKey, JSON.stringify(events))
+        : null;
+
+    // Then the D1 pointer row.
+    const now = new Date().toISOString();
     await db.run(
       `INSERT OR IGNORE INTO game_player_data (
-        game_id, profile_id, player_index, eco_json, non_eco_json
-      ) VALUES (?, ?, ?, ?, ?)`,
+        game_id, profile_id, player_index,
+        eco_r2_key, eco_bytes,
+        non_eco_r2_key, non_eco_bytes,
+        unit_events_r2_key, unit_events_bytes,
+        raw_blobs_generated_at, derived_blobs_generated_at, computed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         gameId,
         player.profileId,
         summaryPlayers.indexOf(player),
-        JSON.stringify(ecoScrubbed),
-        JSON.stringify(nonEcoScrubbed),
+        ecoKey,
+        ecoPut.bytes,
+        nonEcoKey,
+        nonEcoPut.bytes,
+        unitEventsKey,
+        unitEventsPut?.bytes ?? null,
+        now,                        // raw_blobs_generated_at (eco + non-eco, immutable)
+        unitEventsPut ? now : null, // derived_blobs_generated_at (unit events, rebuildable)
+        now,                        // computed_at
       ],
     );
   }
 
-  // ── Step 4: Extract unit events for both players ────────────────
-  for (const player of [p0, p1]) {
-    const row = await db.getOne<{ non_eco_json: string }>(
-      'SELECT non_eco_json FROM game_player_data WHERE game_id = ? AND profile_id = ?',
-      [gameId, player.profileId],
-    );
-
-    if (!row?.non_eco_json) continue;
-
-    let nonEco: { buildOrder?: unknown[] };
-    try {
-      nonEco = JSON.parse(row.non_eco_json);
-    } catch {
-      continue;
-    }
-
-    if (!Array.isArray(nonEco.buildOrder)) continue;
-
-    const result = extractUnitEventsV3(
-      nonEco.buildOrder as any,
-      gameId,
-      player.profileId,
-      indexes,
-    );
-
-    await db.run(
-      `UPDATE game_player_data
-       SET unit_events_json = ?, computed_at = datetime('now')
-       WHERE game_id = ? AND profile_id = ?`,
-      [JSON.stringify(result), gameId, player.profileId],
-    );
-  }
-
   // ── Step 5: Analyze — detect battles, segment, persist ──────────
-  const p0Events = await loadUnitEvents(db, gameId, p0.profileId);
-  const p1Events = await loadUnitEvents(db, gameId, p1.profileId);
+  const p0Events = eventsByProfile.get(p0.profileId) ?? null;
+  const p1Events = eventsByProfile.get(p1.profileId) ?? null;
 
   if (!p0Events || !p1Events) {
     // Extraction failed for one or both players — game row is written
@@ -435,20 +456,6 @@ async function processOneGame(
 
 import type { UnitEventsV3 } from '../packages/core/src/extraction/unit-events';
 
-async function loadUnitEvents(
-  db: PipelineDb,
-  gameId: number,
-  profileId: number,
-): Promise<UnitEventsV3 | null> {
-  const row = await db.getOne<{ unit_events_json: string | null }>(
-    'SELECT unit_events_json FROM game_player_data WHERE game_id = ? AND profile_id = ?',
-    [gameId, profileId],
-  );
-
-  if (!row?.unit_events_json) return null;
-  return JSON.parse(row.unit_events_json) as UnitEventsV3;
-}
-
 // ── Main ───────────────────────────────────────────────────────────────
 
 async function main() {
@@ -462,6 +469,8 @@ async function main() {
   const apiToken = process.env.CLOUDFLARE_API_TOKEN;
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   const databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID;
+  const r2AccessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const r2SecretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
 
   if (!apiToken || !accountId || !databaseId) {
     console.error('Missing required environment variables:');
@@ -471,8 +480,22 @@ async function main() {
     process.exit(1);
   }
 
-  // ── Connect to D1 ──────────────────────────────────────────────
+  // R2 creds are only needed for actual writes, not dry-run inspection.
+  if (!dryRun && (!r2AccessKeyId || !r2SecretAccessKey)) {
+    console.error('Missing required R2 environment variables:');
+    if (!r2AccessKeyId) console.error('  R2_ACCESS_KEY_ID');
+    if (!r2SecretAccessKey) console.error('  R2_SECRET_ACCESS_KEY');
+    process.exit(1);
+  }
+
+  // ── Connect to D1 + R2 ─────────────────────────────────────────
   const db = createD1HttpPipelineDb({ accountId, databaseId, apiToken });
+  const r2 = createR2Client({
+    accountId,
+    accessKeyId: r2AccessKeyId ?? '',
+    secretAccessKey: r2SecretAccessKey ?? '',
+    bucket: R2_BUCKET,
+  });
 
   console.log('\n=== AoE4 Analyzer — Process Pending Games ===\n');
 
@@ -565,7 +588,7 @@ async function main() {
       }
       const costLookup = costLookupCache.get(buildNumber)!;
 
-      const result = await processOneGame(db, job.game_id, entry, indexes, costLookup, buildNumber);
+      const result = await processOneGame(db, r2, job.game_id, entry, indexes, costLookup, buildNumber);
 
       if (result.status === 'skipped') {
         // Already analyzed — mark complete and move on

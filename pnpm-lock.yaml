@@ -45,6 +45,9 @@ importers:
 
   packages/core:
     dependencies:
+      aws4fetch:
+        specifier: ^1.0.20
+        version: 1.0.20
       better-sqlite3:
         specifier: ^11.0.0
         version: 11.10.0
@@ -1102,6 +1105,9 @@ packages:
     engines: {node: ^14.18.0 || >=16.0.0}
     peerDependencies:
       vite: ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0
+
+  aws4fetch@1.0.20:
+    resolution: {integrity: sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g==}
 
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
@@ -2327,6 +2333,8 @@ snapshots:
       vite: 6.4.2(@types/node@25.6.0)(tsx@4.21.0)
     transitivePeerDependencies:
       - supports-color
+
+  aws4fetch@1.0.20: {}
 
   base64-js@1.5.1: {}
 
