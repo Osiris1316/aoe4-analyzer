@@ -1,0 +1,58 @@
+name: Analyze Retrieved Games
+
+# ANALYSIS STAGE (decoupled pipeline).
+# Drains pending_jobs WHERE status='retrieved', reads non-eco blobs back from
+# R2, extracts unit-events, runs battle detection + segmentation + persistence,
+# updates player_stats. Advances pending_jobs: retrieved -> complete.
+# Touches only D1 + R2 (no aoe4world).
+#
+# Points at v2 via CLOUDFLARE_D1_DATABASE_ID_V2 (same secret as retrieval).
+# Offset 30 min after retrieval so there's fresh 'retrieved' work to drain —
+# but the two are independent workflows: either can be paused without the
+# other, which is the point of the decouple.
+
+on:
+  # 30 min after the hourly retrieval run.
+  schedule:
+    - cron: '30 * * * *'
+
+  # Manual trigger from GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Max games to analyze (default: 40)'
+        required: false
+        default: '40'
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Analyze retrieved games
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID_V2 }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          LIMIT="${{ github.event.inputs.limit || '40' }}"
+          npx tsx scripts/analyze-retrieved.ts --limit "$LIMIT"
