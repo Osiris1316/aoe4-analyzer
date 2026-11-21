@@ -1,0 +1,57 @@
+{
+  "_about": [
+    "Hand-set prices and age-up costs for the investment analysis. Every result row stores a fingerprint of this file.",
+    "freeUnitPrices: total listed cost to use for a unit whose matched variation costs nothing. Without an entry, a free unit is priced at the paid variation of the same unit (its regular counterpart), and only when there is none is it counted at 0 and flagged.",
+    "ageUpDefaults: the divisor used when the age-up the player bought can't be found in the build order (the row is flagged). Normally the divisor is the listed cost of the landmark or age-up technology they actually bought, so the Ayyubid Advancement wing's 300, 1350 and 2050 apply by themselves.",
+    "Prices for militia-halberdier, shinobi and rus-tribute agreed by Andrei 21 Nov 2026; the rest come from the Sheet's notes.",
+    "nameAliases: when a build order entry's game ID isn't in game-data.json, it is matched by its icon name instead (tier and civ tag stripped, underscores to hyphens: iron_pagoda_2 -> iron-pagoda). These map an icon name that differs from the data's baseId, keyed kind:name, or civ:kind:name (data abbreviation) for one civ only, which wins over the general key. Added 21 Nov 2026 from the first real-game report. From Andrei: the Jin 'horse archer' icon is the Mohe Tribesman (35 food, 35 wood), 'scorpion' is the springald, and 'crown king' is the English King hero, counted like the Lord of Lancaster when bought (the free one at the start is skipped). 'pirate' is a guess from the Ayyubid Bedouin Swordsman's internal name (unit_pirate_abb_ha_01).",
+    "countUnlabelledArrays: only finished or fully spawned units count (Andrei, 21 Nov 2026), so a unit with no 'finished' or 'constructed' time is skipped, unless the unlabelled array listed here for it is known to mean the unit arrived. Rus warrior monks: some record only unknown.6, and Andrei says they count (21 Nov 2026). Which monks those are (the Abbey of the Trinity's, perhaps) is not confirmed.",
+    "discounts: price cuts that start once the player completes a building, applied to what is paid for after it. Rus Abbey of the Trinity: Warrior Monks cost 50% less (aoe4world data description; Andrei, 21 Nov 2026)."
+  ],
+  "countUnlabelledArrays": {
+    "warrior-monk": ["unknown.6"]
+  },
+  "discounts": [
+    { "civ": "rus", "unit": "warrior-monk", "afterBuilding": "abbey-of-the-trinity", "factor": 0.5 }
+  ],
+  "nameAliases": {
+    "jin:unit:horse-archer": "mohe-tribesman",
+    "unit:scorpion": "springald",
+    "unit:crown-king": "king",
+    "unit:ram": "battering-ram",
+    "unit:beduin-skirmisher": "bedouin-skirmisher",
+    "unit:pirate": "bedouin-swordsman",
+    "unit:desert-rider": "desert-raider",
+    "unit:lord-lancaster": "lord-of-lancaster",
+    "unit:cattle": "highland-cattle",
+    "unit:chierosiphon": "cheirosiphon",
+    "building:palisade-wall": "palisade",
+    "technology:springald": "springald-emplacement",
+    "technology:cannon": "cannon-emplacement"
+  },
+  "freeUnitPrices": {
+    "naginata-samurai-levy": 120,
+    "spearman-levy": 80,
+    "yari-cavalry-levy": 145,
+    "yumi-ashigaru-levy": 65,
+    "mounted-samurai-levy": 250,
+    "tanegashima-ashigaru-levy": 140,
+    "khaganate-horse-archer": 120,
+    "khaganate-knight": 240,
+    "khaganate-mangudai": 150,
+    "khaganate-palace-guard": 115,
+    "khaganate-nest-of-bees": 600,
+    "khaganate-warrior-monk": 240,
+    "earls-guard": 110,
+    "huihui-pao": 1000,
+    "kirkman": 150,
+    "militia-halberdier": 80,
+    "shinobi": 80,
+    "rus-tribute": 110
+  },
+  "ageUpDefaults": {
+    "feudal": 600,
+    "castle": 1800,
+    "imperial": 3600
+  }
+}

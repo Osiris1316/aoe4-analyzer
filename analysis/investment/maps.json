@@ -1,0 +1,10 @@
+{
+  "_about": ["Map types for the investment analysis. Names exactly as aoe4world summaries spell mapName.", "Only land maps are analysed for now. A map in no list is analysed as land and its rows are flagged unlisted_map, until map types can be managed in the UI (Andrei, 21 Nov 2026).", "Source: aoe4world ranked 1v1 map stats labels (10 Nov 2026), plus Golden Pit, Marshland and Socotra as land and Four Lakes as hybrid (Andrei, 21 Nov 2026), and Fangs as land (Andrei, 21 Nov 2026, evening)."],
+  "analyse": ["land"],
+  "unlistedMaps": "land",
+  "types": {
+    "land": ["Dry Arabia", "Gorge", "Flankwoods", "Himeyama", "King of the Hill", "Atacama", "Hidden Valley", "Hill and Dale", "High View", "Lipany", "Carmel", "Hideout", "The Pit", "Sunkenlands", "Cliffside", "Wasteland", "Highwoods", "Golden Pit", "Marshland", "Socotra", "Fangs"],
+    "hybrid": ["West Lake", "Relic River", "Golden Heights", "Baltic", "Mongolian Heights", "Rocky River", "Oasis", "Ancient Spires", "Snake River", "Ocean Gateway", "Craters", "Waterholes", "Danube River", "Four Lakes"],
+    "water": ["Archipelago", "Migration"]
+  }
+}
