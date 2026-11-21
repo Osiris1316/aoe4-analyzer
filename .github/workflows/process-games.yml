@@ -1,9 +1,10 @@
 name: Process Pending Games
 
 on:
-  # Run every 2 hours
-  schedule:
-    - cron: '30 */2 * * *'
+  # FROZEN (v1 is full; workflow disabled on GitHub since June 2026).
+  # Schedule commented out as insurance in case it is re-enabled.
+  # schedule:
+  #   - cron: '30 */2 * * *'
 
   # Manual trigger from GitHub Actions UI
   workflow_dispatch:

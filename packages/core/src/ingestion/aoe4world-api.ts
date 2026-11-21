@@ -41,8 +41,67 @@ export async function fetchGameSummary(
   profileId: number,
   gameId: number
 ): Promise<ApiGameSummaryResponse> {
+  return (await fetchGameSummaryRaw(profileId, gameId)).json;
+}
+
+/**
+ * Same as fetchGameSummary, but also returns the response body exactly as
+ * received, so the retrieval stage can store the untouched summary in R2
+ * (blob-first: the parsed/split/scrubbed forms are derivations).
+ */
+export async function fetchGameSummaryRaw(
+  profileId: number,
+  gameId: number
+): Promise<{ text: string; json: ApiGameSummaryResponse }> {
   const url = `${BASE_SITE}/players/${profileId}/games/${gameId}/summary?camelize=true`;
-  return fetchJson<ApiGameSummaryResponse>(url);
+  const text = await fetchText(url);
+  return { text, json: parseJson<ApiGameSummaryResponse>(text, url) };
+}
+
+/**
+ * One page of the global games endpoint, filtered to a set of players.
+ *
+ * aoe4world rules (https://aoe4world.com/api, read 20 Nov 2026):
+ *   - up to 50 profile_ids per call; page max 20; per_page default 50
+ *   - `leaderboard` takes game kinds here (rm_1v1), not rm_solo
+ *   - with order=started_at, keep `since` a reasonable window (~2 hours)
+ *   - don't repeatedly fetch all 20 pages
+ */
+export async function fetchGamesPage(opts: {
+  profileIds: number[];
+  leaderboard: string;
+  sinceIso: string;
+  page: number;
+}): Promise<ApiGameListResponse> {
+  const params = new URLSearchParams({
+    profile_ids: opts.profileIds.join(','),
+    leaderboard: opts.leaderboard,
+    since: opts.sinceIso,
+    order: 'started_at',
+    page: String(opts.page),
+  });
+  return fetchJson<ApiGameListResponse>(`${BASE_API}/games?${params.toString()}`);
+}
+
+/**
+ * A player's public profile. Only `name` and `profile_id` are relied on;
+ * aoe4world does not document the full response shape.
+ */
+export async function fetchPlayerProfile(
+  profileId: number
+): Promise<{ profile_id: number; name: string; [k: string]: unknown }> {
+  return fetchJson(`${BASE_API}/players/${profileId}`);
+}
+
+/**
+ * The HTTP status attached to an error thrown by this client, or null for
+ * network-level failures (DNS, reset, timeout) that never got a response.
+ * Always classify errors with this — never by searching the message text,
+ * which contains the URL (and therefore arbitrary game/profile digits).
+ */
+export function httpStatusOf(err: unknown): number | null {
+  const code = (err as { httpCode?: unknown } | null)?.httpCode;
+  return typeof code === 'number' ? code : null;
 }
 
 /**
@@ -57,6 +116,14 @@ export function sleep(ms: number): Promise<void> {
  * Generic JSON fetcher with error handling.
  */
 async function fetchJson<T>(url: string): Promise<T> {
+  return parseJson<T>(await fetchText(url), url);
+}
+
+/**
+ * GET a URL and return the body text. Non-2xx responses throw an Error
+ * carrying `httpCode` (read it with httpStatusOf).
+ */
+async function fetchText(url: string): Promise<string> {
   const response = await fetch(url, {
     method: 'GET',
     headers: {
@@ -75,15 +142,19 @@ async function fetchJson<T>(url: string): Promise<T> {
     throw err;
   }
 
-  const text = await response.text();
+  return await response.text();
+}
 
+function parseJson<T>(text: string, url: string): T {
   try {
     return JSON.parse(text) as T;
   } catch {
     const err = new Error(
       `API returned non-JSON from ${url}\n${text.slice(0, 300)}`
     );
-    (err as any).httpCode = response.status;
+    // A 200 with a non-JSON body (e.g. an HTML error page). Kept as 200 so
+    // callers can tell it apart from transport errors.
+    (err as any).httpCode = 200;
     throw err;
   }
 }
