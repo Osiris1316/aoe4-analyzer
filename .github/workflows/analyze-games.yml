@@ -12,9 +12,11 @@ name: Analyze Retrieved Games
 # other, which is the point of the decouple.
 
 on:
-  # 30 min after the hourly retrieval run.
-  schedule:
-    - cron: '30 * * * *'
+  # OFF until step two (analysis) is built and the reference tables are
+  # seeded with fetch-static; otherwise jobs complete with an empty
+  # extraction, which looks like success.
+  # schedule:
+  #   - cron: '30 * * * *'
 
   # Manual trigger from GitHub Actions UI
   workflow_dispatch:

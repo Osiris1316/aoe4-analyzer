@@ -24,8 +24,11 @@ export interface R2PutResult {
 }
 
 export interface R2Client {
-  put(key: string, body: string, contentType?: string): Promise<R2PutResult>;
+  /** Text bodies are sent as UTF-8; byte bodies (e.g. gzip) are sent as-is. */
+  put(key: string, body: string | Uint8Array, contentType?: string): Promise<R2PutResult>;
   get(key: string): Promise<string | null>;
+  /** Raw bytes, for binary objects such as summaries/{gameId}.json.gz. */
+  getBytes(key: string): Promise<Uint8Array | null>;
   head(key: string): Promise<R2PutResult | null>;
 }
 
@@ -36,6 +39,21 @@ export function gpdBlobKey(
   kind: 'eco' | 'non-eco' | 'unit-events',
 ): string {
   return `gpd/${gameId}/${profileId}/${kind}.json`;
+}
+
+/**
+ * Whole-game summary exactly as aoe4world served it (camelized, NOT
+ * URL-scrubbed), gzip-compressed. One object per game, written by the
+ * retrieval stage BEFORE any D1 row for that game (write-ordering rule).
+ *
+ * Stored with Content-Type application/gzip and NO Content-Encoding header,
+ * so every reader (Node fetch, the Worker binding, a browser download) gets
+ * the compressed bytes and gunzips explicitly. Agreed 20 Nov 2026.
+ */
+export const SUMMARY_CONTENT_TYPE = 'application/gzip';
+
+export function summaryBlobKey(gameId: number): string {
+  return `summaries/${gameId}.json.gz`;
 }
 
 export function createR2Client(config: R2Config): R2Client {
@@ -50,10 +68,13 @@ export function createR2Client(config: R2Config): R2Client {
 
   return {
     async put(key, body, contentType = 'application/json') {
-      const bytes = Buffer.byteLength(body, 'utf8');
+      const bytes = typeof body === 'string' ? Buffer.byteLength(body, 'utf8') : body.byteLength;
+      // Copy byte bodies into a standalone Uint8Array: a Node Buffer can be a
+      // view over a larger pooled ArrayBuffer, and only these bytes may be sent.
+      const payload = typeof body === 'string' ? body : new Uint8Array(body);
       const res = await aws.fetch(urlFor(key), {
         method: 'PUT',
-        body,
+        body: payload,
         headers: { 'Content-Type': contentType },
       });
       if (!res.ok) {
@@ -68,6 +89,13 @@ export function createR2Client(config: R2Config): R2Client {
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`R2 GET ${key} failed: ${res.status} ${res.statusText}`);
       return await res.text();
+    },
+
+    async getBytes(key) {
+      const res = await aws.fetch(urlFor(key), { method: 'GET' });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`R2 GET ${key} failed: ${res.status} ${res.statusText}`);
+      return new Uint8Array(await res.arrayBuffer());
     },
 
     async head(key) {

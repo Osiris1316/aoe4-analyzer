@@ -2,27 +2,31 @@
  * Retrieve Pending Games — GitHub Actions Pipeline Script (RETRIEVAL STAGE)
  *
  * This is the retrieval half of the decoupled pipeline. It reads pending
- * jobs from D1 (discovered by the Jobs Worker), fetches game summaries
- * from aoe4world, and stores the RAW blobs (eco + non-eco) to R2 with
- * their D1 pointer rows. It does NOT analyze.
+ * jobs from D1 (queued by scripts/discover-games.ts), fetches each game
+ * summary from aoe4world, and stores the RAW data in R2 with D1 pointer
+ * rows. It does NOT analyze, and it never reads the player list: the
+ * pending_jobs table is its only input.
  *
- * Seam (vs. the old monolithic process-pending.ts):
- *   - KEEPS:  summary fetch, core/player parse, watchlist FK-parents,
- *             games row, eco + non-eco scrub + R2 put + pointer row.
- *   - DROPS:  unit-events extraction, battle detection, segmentation,
- *             analysis persistence, player_stats — ALL analysis, moved to
- *             a separate analyze-retrieved.ts stage that reads non-eco back
- *             from R2. Consequently this stage needs NO reference data
- *             (no resolution indexes, no cost lookup, no patch_registry).
+ * Per game it writes, in this order:
+ *   1. R2  summaries/{gameId}.json.gz — the whole summary exactly as received
+ *          (camelized, not scrubbed), gzipped. Key from summaryBlobKey().
+ *   2. D1  watchlist parents (inactive) + the games row.
+ *   3. Per player: R2 eco + non-eco blobs (split + URL-scrubbed, as before),
+ *      THEN the game_player_data pointer row.
  *
- * Job status lifecycle (the contract between the two stages):
+ * Job status lifecycle (the contract between the stages):
  *     pending  →  retrieved  →  complete
  *     ^discovery  ^this stage   ^analysis stage
- *   Failures: hard errors → 'failed' (+ error); 429s stay 'pending' to retry.
+ *   429s and network failures stay 'pending' and retry next run. Every other
+ *   failure becomes 'failed' with the reason in `error`; the row stays as a
+ *   tombstone so discovery never re-queues it. Re-queue by hand with:
+ *     UPDATE pending_jobs SET status = 'pending', error = NULL WHERE game_id = …;
  *
  * Write ordering (two-store consistency): R2 put first (verifies + throws on
- * failure), THEN the D1 pointer row. A mid-game crash leaves at worst an
- * orphan R2 object (reconcilable), never a D1 pointer to a missing object.
+ * failure), THEN the D1 row. A mid-game crash leaves at worst an orphan R2
+ * object (re-put identically next run), never a D1 pointer to a missing one.
+ * Because the summary is put before any pointer row, "both pointer rows
+ * exist" also means "the summary exists" for every game this version wrote.
  *
  * Usage:
  *   npx tsx scripts/retrieve-pending.ts              # retrieve up to DEFAULT_LIMIT
@@ -32,29 +36,42 @@
  * Required environment variables:
  *   CLOUDFLARE_API_TOKEN       — scoped to Account > D1 > Edit
  *   CLOUDFLARE_ACCOUNT_ID      — Cloudflare account ID
- *   CLOUDFLARE_D1_DATABASE_ID  — D1 database ID  (point at v2 for the migration)
+ *   CLOUDFLARE_D1_DATABASE_ID  — the v2 database id (v1 is refused)
  *   R2_ACCESS_KEY_ID           — R2 S3 access key (required unless --dry-run)
  *   R2_SECRET_ACCESS_KEY       — R2 S3 secret     (required unless --dry-run)
  */
 
+import { gzipSync } from 'node:zlib';
 import { createD1HttpPipelineDb } from '../packages/core/src/db/d1-http';
 import type { PipelineDb } from '../packages/core/src/db/pipeline-db';
-import { fetchGameSummary, sleep } from '../packages/core/src/ingestion/aoe4world-api';
+import { fetchGameSummaryRaw, httpStatusOf, sleep } from '../packages/core/src/ingestion/aoe4world-api';
 import {
   splitSummaryToCoreAndPlayers,
   splitPlayerEcoNonEco,
   scrubUrlsDeep,
 } from '../packages/core/src/ingestion/parsers';
-import { createR2Client, gpdBlobKey, type R2Client } from '../packages/core/src/storage/r2';
-import type { ApiGameListEntry } from '../packages/core/src/types/api-responses';
+import {
+  createR2Client,
+  gpdBlobKey,
+  summaryBlobKey,
+  SUMMARY_CONTENT_TYPE,
+  type R2Client,
+} from '../packages/core/src/storage/r2';
+import { intArg, missingD1Vars, readD1Env, refuseV1 } from '../packages/core/src/harvest/env';
+import type { ApiGameListEntry, ApiGameSummaryResponse } from '../packages/core/src/types/api-responses';
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-/** Base delay between aoe4world summary fetches */
-const SLEEP_BETWEEN_FETCHES_MS = 3000;
+/**
+ * Minimum gap between aoe4world summary fetches. 5 s is the spring 2026
+ * process-pending value that ran for weeks without trouble (session 15
+ * measured roughly 40 quick requests before a 429, resetting in 1–2 min).
+ */
+const SLEEP_BETWEEN_FETCHES_MS = 5000;
 
 /** Default max jobs to retrieve per run */
 const DEFAULT_LIMIT = 40;
+const MAX_LIMIT = 500;
 
 /** Max retries on 429 rate limit */
 const MAX_429_RETRIES = 3;
@@ -63,79 +80,84 @@ const MAX_429_RETRIES = 3;
 const RETRY_DELAYS_MS = [10_000, 30_000, 60_000];
 
 /**
- * If we hit this many consecutive 429s across games (not retries within
- * a single game), assume we're fully rate-limited and stop the run.
- * The remaining games stay pending for the next run.
+ * If this many games IN A ROW stay pending (429 / network) or hit an
+ * unexpected error, stop the run: something systemic is wrong (rate limit,
+ * outage). Remaining games stay pending for the next run.
  */
-const CONSECUTIVE_429_ABORT_LIMIT = 5;
+const CONSECUTIVE_TROUBLE_ABORT_LIMIT = 5;
 
-/** R2 bucket holding gpd blobs (private). */
+/**
+ * If this many summary fetches IN A ROW are refused (any error status other
+ * than 404 — e.g. 403, 5xx), stop too. 404 through both players is the normal
+ * answer for closed match histories and doesn't count. A long run of refusals
+ * more likely means aoe4world is blocking us, and pressing on would mark the
+ * whole batch failed while hammering a server that said no.
+ */
+const CONSECUTIVE_UNAVAILABLE_ABORT_LIMIT = 10;
+
+/**
+ * HTTP statuses that mean "not available via this player's profile" —
+ * worth trying through the opponent's profile before giving up.
+ */
+const FALLBACK_STATUSES = new Set([401, 403, 404]);
+
+/** R2 bucket holding gpd blobs and summaries (private). */
 const R2_BUCKET = 'aoe4-analyzer-blobs';
+
+// ── Pacing ─────────────────────────────────────────────────────────────
+
+let lastFetchAt = 0;
+
+/** Sleep just long enough to keep SLEEP_BETWEEN_FETCHES_MS between fetches. */
+async function pace(): Promise<void> {
+  const wait = lastFetchAt + SLEEP_BETWEEN_FETCHES_MS - Date.now();
+  if (wait > 0) await sleep(wait);
+  lastFetchAt = Date.now();
+}
 
 // ── Fetch with 429 Retry ───────────────────────────────────────────────
 
 /**
- * Fetch a game summary with automatic retry on 429 rate limit.
- * Throws on non-429 errors or after exhausting retries.
+ * Fetch a game summary (raw text + parsed), retrying on HTTP 429.
+ * Throws on any other error, or after exhausting retries. Errors carry the
+ * real HTTP status (read with httpStatusOf) — never match on message text.
  */
 async function fetchSummaryWithRetry(
   profileId: number,
   gameId: number,
-): Promise<any> {
-  let lastErr: Error | null = null;
-
-  for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+): Promise<{ text: string; json: ApiGameSummaryResponse }> {
+  for (let attempt = 0; ; attempt++) {
+    await pace();
     try {
-      return await fetchGameSummary(profileId, gameId);
+      return await fetchGameSummaryRaw(profileId, gameId);
     } catch (err) {
-      const msg = (err as Error).message;
-
-      if (!msg.includes('429')) {
-        throw err; // Not a rate limit — propagate immediately
-      }
-
-      lastErr = err as Error;
-
-      if (attempt < MAX_429_RETRIES) {
-        const delay = RETRY_DELAYS_MS[attempt] ?? 60_000;
-        console.log(`\n    429 rate limited, waiting ${delay / 1000}s (retry ${attempt + 1}/${MAX_429_RETRIES})...`);
-        await sleep(delay);
-      }
+      if (httpStatusOf(err) !== 429 || attempt >= MAX_429_RETRIES) throw err;
+      const delay = RETRY_DELAYS_MS[attempt] ?? 60_000;
+      console.log(`\n    429 rate limited, waiting ${delay / 1000}s (retry ${attempt + 1}/${MAX_429_RETRIES})...`);
+      await sleep(delay);
     }
   }
-
-  throw lastErr ?? new Error('Rate limited after max retries');
 }
 
 // ── Game List Entry Helpers ────────────────────────────────────────────
 // These mirror the private helpers in watchlist.ts.
 
-function getRatingFromGameList(
-  entry: ApiGameListEntry,
-  profileId: number,
-): number | null {
+function findSlot(entry: ApiGameListEntry, profileId: number) {
   for (const team of entry.teams) {
     for (const slot of team) {
-      if (slot.player.profile_id === profileId) {
-        return slot.player.mmr ?? slot.player.rating ?? null;
-      }
+      if (slot.player.profile_id === profileId) return slot.player;
     }
   }
   return null;
 }
 
-function getVodUrlFromGameList(
-  entry: ApiGameListEntry,
-  profileId: number,
-): string | null {
-  for (const team of entry.teams) {
-    for (const slot of team) {
-      if (slot.player.profile_id === profileId) {
-        return (slot.player as any).twitch_video_url ?? null;
-      }
-    }
-  }
-  return null;
+function getRatingFromGameList(entry: ApiGameListEntry, profileId: number): number | null {
+  const p = findSlot(entry, profileId);
+  return p ? (p.mmr ?? p.rating ?? null) : null;
+}
+
+function getVodUrlFromGameList(entry: ApiGameListEntry, profileId: number): string | null {
+  return findSlot(entry, profileId)?.twitch_video_url ?? null;
 }
 
 /**
@@ -148,47 +170,46 @@ function extractPlayers(entry: ApiGameListEntry): {
   p0Name: string;
   p1Name: string;
 } | null {
-  const players: { profileId: number; name: string }[] = [];
-
-  for (const team of entry.teams) {
-    for (const slot of team) {
-      players.push({
-        profileId: slot.player.profile_id,
-        name: slot.player.name,
-      });
-    }
-  }
-
-  if (players.length < 2) return null;
-
-  return {
-    p0ProfileId: players[0].profileId,
-    p1ProfileId: players[1].profileId,
-    p0Name: players[0].name,
-    p1Name: players[1].name,
-  };
+  const slots = (entry.teams ?? []).flat();
+  const a = slots[0]?.player;
+  const b = slots[1]?.player;
+  if (!a || !b) return null;
+  return { p0ProfileId: a.profile_id, p1ProfileId: b.profile_id, p0Name: a.name, p1Name: b.name };
 }
 
 /**
- * Idempotency guard: has this game already been retrieved?
- * If a game_player_data pointer row exists, the raw blobs are already in
- * R2 — skip the aoe4world fetch entirely on re-runs (e.g. after a crash).
+ * Idempotency guard: has this game already been fully retrieved?
+ * Requires BOTH players' pointer rows. A run that died between the first
+ * and second player leaves one row; that game must be retrieved again
+ * (all writes are deterministic and INSERT OR IGNORE, so redoing is safe),
+ * not marked retrieved — analysis rejects games with fewer than two rows.
  */
-async function rawDataExists(db: PipelineDb, gameId: number): Promise<boolean> {
-  const row = await db.getOne<{ one: number }>(
-    'SELECT 1 AS one FROM game_player_data WHERE game_id = ? LIMIT 1',
+async function rawDataComplete(db: PipelineDb, gameId: number): Promise<boolean> {
+  const row = await db.getOne<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM game_player_data WHERE game_id = ?',
     [gameId],
   );
-  return row != null;
+  return (row?.n ?? 0) >= 2;
 }
 
 // ── Single Game Retrieval ──────────────────────────────────────────────
 
-interface RetrieveResult {
-  gameId: number;
-  status: 'retrieved' | 'failed' | 'skipped';
-  error?: string;
-  wasRateLimited?: boolean;
+type RetrieveResult =
+  | { gameId: number; status: 'retrieved'; via: number; summaryBytes: number; summaryGzBytes: number }
+  | { gameId: number; status: 'skipped' }
+  /** 429 or network failure: leave pending, try next run. */
+  | { gameId: number; status: 'retry-later'; error: string }
+  /** refused: aoe4world answered with an error status other than 404. */
+  | { gameId: number; status: 'failed'; error: string; refused: boolean };
+
+function describeFetchError(err: unknown): string {
+  const status = httpStatusOf(err);
+  return status !== null ? `HTTP ${status}` : `network error: ${(err as Error).message}`;
+}
+
+function isRetryLater(err: unknown): boolean {
+  const status = httpStatusOf(err);
+  return status === 429 || status === null;
 }
 
 async function retrieveOneGame(
@@ -199,58 +220,55 @@ async function retrieveOneGame(
 ): Promise<RetrieveResult> {
   const players = extractPlayers(gameListEntry);
   if (!players) {
-    return { gameId, status: 'failed', error: 'Could not extract players from game_list_meta' };
+    return { gameId, status: 'failed', error: 'Could not extract players from game_list_meta', refused: false };
   }
-
   const { p0ProfileId, p1ProfileId } = players;
 
-  // ── Skip if raw blobs already retrieved ─────────────────────────
-  if (await rawDataExists(db, gameId)) {
+  // ── Skip if raw data already complete ───────────────────────────
+  if (await rawDataComplete(db, gameId)) {
     return { gameId, status: 'skipped' };
   }
 
-  // ── Step 1: Fetch summary from aoe4world (with 429 retry) ──────
-  let summary: any;
+  // ── Step 1: Fetch summary (via p0, falling back to p1) ──────────
+  let fetched: { text: string; json: ApiGameSummaryResponse };
+  let via = p0ProfileId;
   try {
-    summary = await fetchSummaryWithRetry(p0ProfileId, gameId);
+    fetched = await fetchSummaryWithRetry(p0ProfileId, gameId);
   } catch (err) {
-    const msg = (err as Error).message;
-    const is429 = msg.includes('429');
-
-    // Try fallback via the other player on 404
-    if (msg.includes('404')) {
-      try {
-        await sleep(SLEEP_BETWEEN_FETCHES_MS);
-        summary = await fetchSummaryWithRetry(p1ProfileId, gameId);
-      } catch (err2) {
-        const msg2 = (err2 as Error).message;
-        return {
-          gameId, status: 'failed',
-          error: `Summary fetch failed via both players: ${msg2}`,
-          wasRateLimited: msg2.includes('429'),
-        };
-      }
-    } else {
-      return {
-        gameId, status: 'failed',
-        error: `Summary fetch failed: ${msg}`,
-        wasRateLimited: is429,
-      };
+    const status = httpStatusOf(err);
+    if (status === null || !FALLBACK_STATUSES.has(status)) {
+      const error = `Summary fetch failed: ${describeFetchError(err)}`;
+      return isRetryLater(err) ? { gameId, status: 'retry-later', error } : { gameId, status: 'failed', error, refused: httpStatusOf(err) !== 404 };
+    }
+    try {
+      via = p1ProfileId;
+      fetched = await fetchSummaryWithRetry(p1ProfileId, gameId);
+    } catch (err2) {
+      const error = `Summary fetch failed via both players: ${describeFetchError(err)} / ${describeFetchError(err2)}`;
+      return isRetryLater(err2) ? { gameId, status: 'retry-later', error } : { gameId, status: 'failed', error, refused: httpStatusOf(err2) !== 404 };
     }
   }
 
-  // ── Step 2: Parse summary and write game row ────────────────────
-  const { gameCore, players: summaryPlayers } = splitSummaryToCoreAndPlayers(summary);
-
-  if (summaryPlayers.length < 2) {
-    return { gameId, status: 'failed', error: `Expected 2 players in summary, got ${summaryPlayers.length}` };
+  const summary = fetched.json;
+  if (typeof summary?.gameId === 'number' && summary.gameId !== gameId) {
+    return { gameId, status: 'failed', error: `Summary is for game ${summary.gameId}, expected ${gameId}`, refused: false };
   }
 
+  const { gameCore, players: summaryPlayers } = splitSummaryToCoreAndPlayers(summary);
   const p0 = summaryPlayers[0];
   const p1 = summaryPlayers[1];
+  if (summaryPlayers.length !== 2 || !p0 || !p1) {
+    return { gameId, status: 'failed', error: `Expected 2 players in summary, got ${summaryPlayers.length}`, refused: false };
+  }
 
-  // Ensure both players exist in watchlist (inactive if new) — FK parents
-  // for both the games row and the game_player_data rows below.
+  // ── Step 2: whole summary to R2, before any D1 row ──────────────
+  const rawBytes = Buffer.from(fetched.text, 'utf8');
+  const gz = gzipSync(rawBytes);
+  await r2.put(summaryBlobKey(gameId), gz, SUMMARY_CONTENT_TYPE);
+
+  // ── Step 3: watchlist parents + games row ───────────────────────
+  // Both players exist in watchlist (inactive if new) — FK parents for the
+  // games row and the game_player_data rows below.
   await db.run(
     'INSERT OR IGNORE INTO watchlist (profile_id, name, is_pro, active) VALUES (?, ?, 0, 0)',
     [p0.profileId, p0.name],
@@ -294,18 +312,15 @@ async function retrieveOneGame(
     ],
   );
 
-  // ── Step 3: per player — split, scrub, put RAW blobs to R2, then
+  // ── Step 4: per player — split, scrub, put RAW blobs to R2, then
   //   write the D1 pointer row. Unit-events (derived) are intentionally
   //   NOT extracted here — that is the analysis stage's job. The pointer
-  //   row's unit_events_* and derived_blobs_generated_at start NULL and
-  //   get filled when analysis reads non-eco back from R2. ─────────────
-  for (const player of [p0, p1]) {
+  //   row's unit_events_* and derived_blobs_generated_at start NULL. ────
+  for (const [playerIndex, player] of [p0, p1].entries()) {
     const { eco, nonEco } = splitPlayerEcoNonEco(player);
     const ecoScrubbed = scrubUrlsDeep(eco);
     const nonEcoScrubbed = scrubUrlsDeep(nonEco);
 
-    // Deterministic R2 keys (kind values are hyphenated in keys.ts —
-    // never derive by string-munging column names).
     const ecoKey = gpdBlobKey(gameId, player.profileId, 'eco');
     const nonEcoKey = gpdBlobKey(gameId, player.profileId, 'non-eco');
 
@@ -314,7 +329,6 @@ async function retrieveOneGame(
     const nonEcoPut = await r2.put(nonEcoKey, JSON.stringify(nonEcoScrubbed));
 
     // Then the D1 pointer row — raw keys only; derived columns NULL.
-    const now = new Date().toISOString();
     await db.run(
       `INSERT OR IGNORE INTO game_player_data (
         game_id, profile_id, player_index,
@@ -326,47 +340,43 @@ async function retrieveOneGame(
       [
         gameId,
         player.profileId,
-        summaryPlayers.indexOf(player),
+        playerIndex,
         ecoKey,
         ecoPut.bytes,
         nonEcoKey,
         nonEcoPut.bytes,
-        null,   // unit_events_r2_key   — analysis fills
-        null,   // unit_events_bytes    — analysis fills
-        now,    // raw_blobs_generated_at (eco + non-eco, immutable)
-        null,   // derived_blobs_generated_at — analysis fills
-        null,   // computed_at — analysis fills
+        null, // unit_events_r2_key   — analysis fills
+        null, // unit_events_bytes    — analysis fills
+        new Date().toISOString(), // raw_blobs_generated_at (eco + non-eco, immutable)
+        null, // derived_blobs_generated_at — analysis fills
+        null, // computed_at — analysis fills
       ],
     );
   }
 
-  return { gameId, status: 'retrieved' };
+  return { gameId, status: 'retrieved', via, summaryBytes: rawBytes.byteLength, summaryGzBytes: gz.byteLength };
 }
 
 // ── Main ───────────────────────────────────────────────────────────────
+
+const kb = (n: number) => `${Math.round(n / 1024)} KB`;
 
 async function main() {
   // ── Parse args ──────────────────────────────────────────────────
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
-  const limitFlag = args.indexOf('--limit');
-  const limit = limitFlag !== -1 ? Number(args[limitFlag + 1]) : DEFAULT_LIMIT;
+  const limit = intArg(args, '--limit', DEFAULT_LIMIT, MAX_LIMIT);
 
   // ── Validate environment ────────────────────────────────────────
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID;
-  const r2AccessKeyId = process.env.R2_ACCESS_KEY_ID;
-  const r2SecretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
-
-  if (!apiToken || !accountId || !databaseId) {
-    console.error('Missing required environment variables:');
-    if (!apiToken) console.error('  CLOUDFLARE_API_TOKEN');
-    if (!accountId) console.error('  CLOUDFLARE_ACCOUNT_ID');
-    if (!databaseId) console.error('  CLOUDFLARE_D1_DATABASE_ID');
+  const d1Env = readD1Env();
+  if (!d1Env) {
+    console.error(`Missing required environment variables:\n  ${missingD1Vars().join('\n  ')}`);
     process.exit(1);
   }
+  refuseV1(d1Env.databaseId);
 
+  const r2AccessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const r2SecretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
   // R2 creds are required for real retrieval (this stage always writes R2).
   if (!dryRun && (!r2AccessKeyId || !r2SecretAccessKey)) {
     console.error('Missing required R2 environment variables:');
@@ -376,15 +386,16 @@ async function main() {
   }
 
   // ── Connect to D1 + R2 ─────────────────────────────────────────
-  const db = createD1HttpPipelineDb({ accountId, databaseId, apiToken });
+  const db = createD1HttpPipelineDb(d1Env);
   const r2 = createR2Client({
-    accountId,
+    accountId: d1Env.accountId,
     accessKeyId: r2AccessKeyId ?? '',
     secretAccessKey: r2SecretAccessKey ?? '',
     bucket: R2_BUCKET,
   });
 
   console.log('\n=== AoE4 Analyzer — Retrieve Pending Games (RETRIEVAL) ===\n');
+  console.log(`Database: ${d1Env.databaseId}`);
 
   // ── Fetch pending jobs ──────────────────────────────────────────
   const pendingJobs = await db.getMany<{
@@ -395,12 +406,12 @@ async function main() {
     `SELECT game_id, game_list_meta, created_at
      FROM pending_jobs
      WHERE status = 'pending'
-     ORDER BY created_at ASC
+     ORDER BY created_at ASC, game_id ASC
      LIMIT ?`,
     [limit],
   );
 
-  console.log(`Found ${pendingJobs.length} pending job(s).\n`);
+  console.log(`Found ${pendingJobs.length} pending job(s) (limit ${limit}).\n`);
 
   if (pendingJobs.length === 0) {
     console.log('Nothing to do.');
@@ -412,7 +423,7 @@ async function main() {
       const entry = JSON.parse(job.game_list_meta) as ApiGameListEntry;
       const players = extractPlayers(entry);
       console.log(
-        `  ${job.game_id} — ${players?.p0Name ?? '?'} vs ${players?.p1Name ?? '?'} (created ${job.created_at})`,
+        `  ${job.game_id} — ${players?.p0Name ?? '?'} vs ${players?.p1Name ?? '?'} (queued ${job.created_at})`,
       );
     }
     console.log('\nDry run — no changes made.');
@@ -423,95 +434,105 @@ async function main() {
   let retrieved = 0;
   let failed = 0;
   let skipped = 0;
-  let consecutive429s = 0;
+  let retryLater = 0;
+  let consecutiveTrouble = 0;
+  let consecutiveUnavailable = 0;
+  let gzTotal = 0;
 
   for (const job of pendingJobs) {
-    // ── Abort if we're hitting sustained rate limits ────────────
-    if (consecutive429s >= CONSECUTIVE_429_ABORT_LIMIT) {
-      console.log(`\n  Aborting: ${CONSECUTIVE_429_ABORT_LIMIT} consecutive rate limits. Remaining games stay pending for next run.`);
+    if (consecutiveTrouble >= CONSECUTIVE_TROUBLE_ABORT_LIMIT) {
+      console.log(
+        `\n  Aborting: ${CONSECUTIVE_TROUBLE_ABORT_LIMIT} games in a row hit rate limits or errors. ` +
+          'Remaining games stay pending for the next run.',
+      );
+      break;
+    }
+    if (consecutiveUnavailable >= CONSECUTIVE_UNAVAILABLE_ABORT_LIMIT) {
+      console.log(
+        `\n  Aborting: ${CONSECUTIVE_UNAVAILABLE_ABORT_LIMIT} summary fetches in a row were refused (not 404). ` +
+          'Check one by hand on aoe4world before the next run.',
+      );
       break;
     }
 
-    const entry = JSON.parse(job.game_list_meta) as ApiGameListEntry;
+    let entry: ApiGameListEntry;
+    try {
+      entry = JSON.parse(job.game_list_meta) as ApiGameListEntry;
+    } catch {
+      await db.run("UPDATE pending_jobs SET status = 'failed', error = ? WHERE game_id = ?", [
+        'game_list_meta is not valid JSON',
+        job.game_id,
+      ]);
+      failed++;
+      continue;
+    }
     const players = extractPlayers(entry);
-    const label = players
-      ? `${players.p0Name} vs ${players.p1Name}`
-      : `game ${job.game_id}`;
+    const label = players ? `${players.p0Name} vs ${players.p1Name}` : `game ${job.game_id}`;
 
     process.stdout.write(`  ${job.game_id} (${label}) → `);
 
     try {
-      // Rate limit: sleep before each summary fetch
-      if (retrieved + failed > 0) {
-        await sleep(SLEEP_BETWEEN_FETCHES_MS);
-      }
-
       const result = await retrieveOneGame(db, r2, job.game_id, entry);
 
-      if (result.status === 'skipped') {
-        // Raw already present — advance the job so analysis can pick it up.
-        await db.run(
-          "UPDATE pending_jobs SET status = 'retrieved' WHERE game_id = ?",
-          [job.game_id],
-        );
-        console.log('already retrieved, marked retrieved');
-        skipped++;
-        consecutive429s = 0;
-        continue;
+      switch (result.status) {
+        case 'skipped':
+          // Raw already complete — advance the job so analysis can pick it up.
+          await db.run("UPDATE pending_jobs SET status = 'retrieved', error = NULL WHERE game_id = ?", [job.game_id]);
+          console.log('already retrieved, marked retrieved');
+          skipped++;
+          consecutiveTrouble = 0;
+          consecutiveUnavailable = 0;
+          break;
+
+        case 'retry-later':
+          console.log(`${result.error} (stays pending, retried next run)`);
+          retryLater++;
+          consecutiveTrouble++;
+          break;
+
+        case 'failed':
+          await db.run("UPDATE pending_jobs SET status = 'failed', error = ? WHERE game_id = ?", [
+            result.error,
+            job.game_id,
+          ]);
+          console.log(`FAILED: ${result.error}`);
+          failed++;
+          consecutiveTrouble = 0; // usually game-specific, not systemic…
+          if (result.refused) consecutiveUnavailable++; // …unless refusals keep coming
+          break;
+
+        case 'retrieved':
+          // Success — advance to 'retrieved' (analysis stage will take it to 'complete')
+          await db.run("UPDATE pending_jobs SET status = 'retrieved', error = NULL WHERE game_id = ?", [job.game_id]);
+          console.log(
+            `retrieved${result.via !== players?.p0ProfileId ? ' (via opponent)' : ''}, ` +
+              `summary ${kb(result.summaryBytes)} → ${kb(result.summaryGzBytes)} gz`,
+          );
+          retrieved++;
+          gzTotal += result.summaryGzBytes;
+          consecutiveTrouble = 0;
+          consecutiveUnavailable = 0;
+          break;
       }
-
-      if (result.status === 'failed') {
-        // On 429 failure: leave as pending so next run retries
-        if (result.wasRateLimited) {
-          console.log(`RATE LIMITED (will retry next run)`);
-          consecutive429s++;
-          continue;
-        }
-
-        await db.run(
-          "UPDATE pending_jobs SET status = 'failed', error = ? WHERE game_id = ?",
-          [result.error ?? 'Unknown error', job.game_id],
-        );
-        console.log(`FAILED: ${result.error}`);
-        failed++;
-        consecutive429s = 0;
-        continue;
-      }
-
-      // Success — advance to 'retrieved' (analysis stage will take it to 'complete')
-      await db.run(
-        "UPDATE pending_jobs SET status = 'retrieved' WHERE game_id = ?",
-        [job.game_id],
-      );
-      console.log('retrieved (raw blobs stored)');
-      retrieved++;
-      consecutive429s = 0;
     } catch (err) {
+      // Unexpected (R2, D1 or parsing). Mark failed with the reason, and
+      // count it toward the abort so an outage fails a handful, not a batch.
       const msg = (err as Error).message;
-
-      // On unexpected 429: leave pending, don't mark failed
-      if (msg.includes('429')) {
-        console.log(`RATE LIMITED (will retry next run)`);
-        consecutive429s++;
-        continue;
-      }
-
-      // Unexpected non-429 error — mark failed and continue
-      await db.run(
-        "UPDATE pending_jobs SET status = 'failed', error = ? WHERE game_id = ?",
-        [msg, job.game_id],
-      );
+      await db
+        .run("UPDATE pending_jobs SET status = 'failed', error = ? WHERE game_id = ?", [msg, job.game_id])
+        .catch(() => undefined);
       console.log(`FATAL: ${msg}`);
       failed++;
-      consecutive429s = 0;
+      consecutiveTrouble++;
     }
   }
 
   // ── Summary ─────────────────────────────────────────────────────
   console.log('\n--- Summary ---');
-  console.log(`  Retrieved:  ${retrieved}`);
-  if (skipped > 0) console.log(`  Skipped:    ${skipped} (already retrieved)`);
-  if (failed > 0) console.log(`  Failed:     ${failed}`);
+  console.log(`  Retrieved:    ${retrieved}${retrieved > 0 ? ` (summaries ${kb(gzTotal)} gz in total)` : ''}`);
+  if (skipped > 0) console.log(`  Skipped:      ${skipped} (already retrieved)`);
+  if (retryLater > 0) console.log(`  Retry later:  ${retryLater} (rate limit or network)`);
+  if (failed > 0) console.log(`  Failed:       ${failed}`);
   console.log('\nDone.');
 }
 

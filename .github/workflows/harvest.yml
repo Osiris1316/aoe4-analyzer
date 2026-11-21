@@ -1,0 +1,108 @@
+name: Harvest Games (v2)
+
+# Discovery then retrieval, in one run, against v2 only.
+#   1. scripts/discover-games.ts — tracked players' new ranked 1v1 games → pending_jobs
+#   2. scripts/retrieve-pending.ts — pending_jobs → R2 (summary + split blobs) + D1 pointer rows
+# Retrieval runs even if discovery had errors, so the existing queue still drains.
+#
+# Replaces retrieve-games.yml. Needs repo secret CLOUDFLARE_D1_DATABASE_ID_V2
+# (= 67a5ef0e-8b13-4a05-b9bc-33142524aca0). The frozen v1 workflows keep the
+# CLOUDFLARE_D1_DATABASE_ID secret; the scripts refuse the v1 id anyway.
+#
+# Player source: repo variable HARVEST_PLAYER_SOURCE (file | v2), default file.
+# Swap it in Settings → Secrets and variables → Actions → Variables; no commit.
+
+on:
+  # OFF until the first manual run is green. Then uncomment (every 2 hours,
+  # off the top of the hour). GitHub only runs schedules from main.
+  # schedule:
+  #   - cron: '17 */2 * * *'
+
+  workflow_dispatch:
+    inputs:
+      since_hours:
+        description: 'Discovery window in hours (incremental mode, max 48)'
+        required: false
+        default: '4'
+      recent_per_player:
+        description: 'Seed mode: last N games per player instead of a window (leave blank normally)'
+        required: false
+        default: ''
+      groups:
+        description: 'Only these groups, comma-separated (blank = all)'
+        required: false
+        default: ''
+      limit:
+        description: 'Max games to retrieve this run'
+        required: false
+        default: '40'
+      dry_run:
+        description: 'Dry run: write nothing'
+        type: boolean
+        required: false
+        default: false
+
+# One harvest at a time. A run that overlaps the next schedule makes the next
+# one wait instead of fetching the same pending games twice.
+concurrency:
+  group: harvest-v2
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID_V2 }}
+      PLAYER_SOURCE: ${{ vars.HARVEST_PLAYER_SOURCE || 'file' }}
+      # Inputs go through env, never straight into the shell script.
+      IN_SINCE_HOURS: ${{ inputs.since_hours }}
+      IN_RECENT: ${{ inputs.recent_per_player }}
+      IN_GROUPS: ${{ inputs.groups }}
+      IN_LIMIT: ${{ inputs.limit }}
+      IN_DRY_RUN: ${{ inputs.dry_run }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Discover new games
+        run: |
+          ARGS=()
+          if [ -n "$IN_RECENT" ]; then
+            ARGS+=(--recent-per-player "$IN_RECENT")
+          else
+            ARGS+=(--since-hours "${IN_SINCE_HOURS:-4}")
+          fi
+          if [ -n "$IN_GROUPS" ]; then ARGS+=(--groups "$IN_GROUPS"); fi
+          if [ "$IN_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          npx tsx scripts/discover-games.ts "${ARGS[@]}"
+
+      - name: Retrieve pending games
+        if: ${{ !cancelled() }}
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          ARGS=(--limit "${IN_LIMIT:-40}")
+          if [ "$IN_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          npx tsx scripts/retrieve-pending.ts "${ARGS[@]}"

@@ -1,0 +1,22 @@
+{
+  "_help": [
+    "Who the harvest tracks. Read by scripts/discover-games.ts when PLAYER_SOURCE is 'file' (the default).",
+    "Each player: profileId (the number in their aoe4world profile link, no quotes), person (the human; alts share one person), group (one of the groups below).",
+    "Optional: note (any text), active (false pauses a player without deleting the line).",
+    "Check after editing: npx tsx scripts/discover-games.ts --check  (validates and looks up each name on aoe4world, writes nothing)."
+  ],
+  "groups": ["me", "league", "pro"],
+  "players": [
+    { "profileId": 5411717, "person": "Osiris1316", "group": "me" },
+
+    { "profileId": 5409008, "person": "Not_A_Beaver", "group": "league" },
+
+    { "profileId": 60328, "person": "VortiX", "group": "pro" },
+    { "profileId": 1102458, "person": "MarineLorD", "group": "pro" },
+    { "profileId": 7410194, "person": "MarineLorD", "group": "pro", "note": "alt ORANGUTAN; on the rm_solo top 50, 20 Nov 2026" },
+    { "profileId": 8442107, "person": "Wam01", "group": "pro" },
+    { "profileId": 8354416, "person": "LoueMT", "group": "pro", "note": "EL.loueMT, rm_solo #2 on 20 Nov 2026" },
+    { "profileId": 7614140, "person": "MSN", "group": "pro", "note": "VES Msn.bodog (dk), rm_solo #14 on 20 Nov 2026; confirm this is MSN" },
+    { "profileId": 6925620, "person": "Lucifron", "group": "pro", "note": "LucifroN (es); last ranked game early Sep 2026, so he may be on another account" }
+  ]
+}
