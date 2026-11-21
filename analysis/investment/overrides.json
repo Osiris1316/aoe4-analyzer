@@ -1,0 +1,33 @@
+{
+  "_about": [
+    "Hand-set prices and age-up costs for the investment analysis. Every result row stores a fingerprint of this file.",
+    "freeUnitPrices: total listed cost to use for a unit whose matched variation costs nothing. Without an entry, a free unit is priced at the paid variation of the same unit (its regular counterpart), and only when there is none is it counted at 0 and flagged.",
+    "ageUpDefaults: the divisor used when the age-up the player bought can't be found in the build order (the row is flagged). Normally the divisor is the listed cost of the landmark or age-up technology they actually bought, so the Ayyubid Advancement wing's 300, 1350 and 2050 apply by themselves.",
+    "Prices for militia-halberdier, shinobi and rus-tribute agreed by Andrei 21 Nov 2026; the rest come from the Sheet's notes."
+  ],
+  "freeUnitPrices": {
+    "naginata-samurai-levy": 120,
+    "spearman-levy": 80,
+    "yari-cavalry-levy": 145,
+    "yumi-ashigaru-levy": 65,
+    "mounted-samurai-levy": 250,
+    "tanegashima-ashigaru-levy": 140,
+    "khaganate-horse-archer": 120,
+    "khaganate-knight": 240,
+    "khaganate-mangudai": 150,
+    "khaganate-palace-guard": 115,
+    "khaganate-nest-of-bees": 600,
+    "khaganate-warrior-monk": 240,
+    "earls-guard": 110,
+    "huihui-pao": 1000,
+    "kirkman": 150,
+    "militia-halberdier": 80,
+    "shinobi": 80,
+    "rus-tribute": 110
+  },
+  "ageUpDefaults": {
+    "feudal": 600,
+    "castle": 1800,
+    "imperial": 3600
+  }
+}

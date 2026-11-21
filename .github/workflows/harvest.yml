@@ -1,8 +1,9 @@
 name: Harvest Games (v2)
 
-# Discovery then retrieval, in one run, against v2 only.
+# Discovery, retrieval and (once switched on) analysis, in one run, against v2 only.
 #   1. scripts/discover-games.ts — tracked players' new ranked 1v1 games → pending_jobs
 #   2. scripts/retrieve-pending.ts — pending_jobs → R2 (summary + split blobs) + D1 pointer rows
+#   3. scripts/analyze-investment.ts — new summaries → investment ratios (repo variable INVESTMENT_ANALYSIS=on)
 # Retrieval runs even if discovery had errors, so the existing queue still drains.
 #
 # Replaces retrieve-games.yml. Needs repo secret CLOUDFLARE_D1_DATABASE_ID_V2
@@ -106,3 +107,16 @@ jobs:
           ARGS=(--limit "${IN_LIMIT:-40}")
           if [ "$IN_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
           npx tsx scripts/retrieve-pending.ts "${ARGS[@]}"
+
+      # Investment ratios for newly retrieved games. Off until the repo variable
+      # INVESTMENT_ANALYSIS is set to 'on' (Settings > Secrets and variables >
+      # Actions > Variables), after the numbers have been checked by hand.
+      - name: Analyze investment ratios
+        if: ${{ !cancelled() && vars.INVESTMENT_ANALYSIS == 'on' }}
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          ARGS=(--limit 200)
+          if [ "$IN_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          npx tsx scripts/analyze-investment.ts "${ARGS[@]}"

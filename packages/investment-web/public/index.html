@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Military investment before age-up</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header>
+    <h1>Military investment before age-up</h1>
+    <p class="sub">Share of the next age-up's cost spent on military: production buildings, units and defenses. Walls are shown separately.</p>
+  </header>
+
+  <nav class="tabs" id="tabs" aria-label="Age window">
+    <button type="button" data-window="dark" aria-pressed="true">Dark → Feudal</button>
+    <button type="button" data-window="feudal" aria-pressed="false">Feudal → Castle</button>
+    <button type="button" data-window="castle" aria-pressed="false">Castle → Imperial</button>
+  </nav>
+
+  <section class="filters" aria-label="Filters">
+    <label>Who
+      <select id="group"><option value="all">Everyone</option><option value="tracked">Tracked players</option><option value="untracked">Opponents only</option></select>
+    </label>
+    <label>Civ
+      <select id="civ"><option value="">Any</option></select>
+    </label>
+    <label>Versus
+      <select id="vs"><option value="">Any</option></select>
+    </label>
+    <label>Sort
+      <select id="sort">
+        <option value="combined">Combined</option>
+        <option value="units">Units</option>
+        <option value="production">Production</option>
+        <option value="defense">Defense</option>
+        <option value="walls">Walls</option>
+        <option value="ageup">Age-up time</option>
+        <option value="date">Date played</option>
+      </select>
+    </label>
+    <button type="button" id="dir" aria-label="Sort direction">Highest first</button>
+    <label class="wide">Player
+      <input id="q" type="search" placeholder="Name" autocomplete="off">
+    </label>
+    <label class="check"><input id="reached" type="checkbox"> Aged up only</label>
+  </section>
+
+  <section class="path" id="path" aria-label="Age path" hidden></section>
+
+  <section class="range" aria-label="Narrow this age to a range">
+    <div class="range-head">
+      <span id="range-title">Narrow this age to a range of</span>
+      <select id="hm" aria-label="Ratio for the range">
+        <option value="combined">Combined</option>
+        <option value="units">Units</option>
+        <option value="production">Production</option>
+        <option value="defense">Defense</option>
+        <option value="walls">Walls</option>
+      </select>
+    </div>
+    <div class="hist" id="hist" role="group" aria-label="How many player-games at each level; tap bars to choose a range"></div>
+    <div class="hist-axis"><span>0%</span><span>50%</span><span>100%</span><span>150%</span><span>200%+</span></div>
+    <div class="range-inputs">
+      <label>From <input id="lo" type="number" inputmode="numeric" min="0" step="5" placeholder="0">%</label>
+      <label>to under <input id="hi" type="number" inputmode="numeric" min="0" step="5" placeholder="any">%</label>
+      <button type="button" id="apply">Apply</button>
+      <button type="button" id="clear">Clear</button>
+    </div>
+  </section>
+
+  <p id="status" class="status" role="status">Loading…</p>
+  <ol id="list" class="list"></ol>
+
+  <footer>
+    <p id="meta"></p>
+    <p>Bar: full width is the whole age-up cost. <span class="key p">Production</span> <span class="key u">Units</span> <span class="key d">Defense</span></p>
+  </footer>
+  <script src="/app.js"></script>
+</body>
+</html>

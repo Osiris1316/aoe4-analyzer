@@ -1,0 +1,22 @@
+// aoe4-investment: the investment ratios phone page and its read-only API.
+// Its own Worker, bound to v2 only. Deploy from the repo root with:
+//   npx wrangler deploy --config packages/investment-web/wrangler.jsonc
+// Never add this binding to the root wrangler.jsonc (that Worker serves v1).
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "aoe4-investment",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-04-20",
+  "assets": {
+    "directory": "./public",
+    "not_found_handling": "none"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aoe4-analyzer-db-v2",
+      "database_id": "67a5ef0e-8b13-4a05-b9bc-33142524aca0"
+    }
+  ],
+  "observability": { "enabled": true }
+}
