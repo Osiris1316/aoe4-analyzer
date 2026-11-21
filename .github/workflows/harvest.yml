@@ -15,8 +15,8 @@ name: Harvest Games (v2)
 on:
   # OFF until the first manual run is green. Then uncomment (every 2 hours,
   # off the top of the hour). GitHub only runs schedules from main.
-  # schedule:
-  #   - cron: '17 */2 * * *'
+  schedule:
+    - cron: '17 */2 * * *'
 
   workflow_dispatch:
     inputs:
