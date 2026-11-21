@@ -20,6 +20,12 @@
  * Buildings are charged only if they were completed: the summary logs a
  * cancelled placement as "destroyed" with no completion, so it never counts.
  * Anything that exists at minute zero (starting scout, Khan, Jeanne) is skipped.
+ *
+ * Matching: each build order entry is matched to the data by its game ID
+ * (pbgid). Some units carry more than one ID in the game and the data lists
+ * only one (Jin iron pagodas, rams, some horsemen), so when the ID is missing
+ * the entry is matched by its icon name within the civ instead, and the
+ * report lists every such match. Age-ups use ID matches only.
  */
 
 import { createHash } from 'node:crypto';
@@ -64,6 +70,18 @@ interface CategoriesFile {
 interface OverridesFile {
   freeUnitPrices: Record<string, number>;
   ageUpDefaults: Record<NextAge, number>;
+  /** `${kind}:${name from the icon}` -> data baseId, for names that don't match the data's own. */
+  nameAliases?: Record<string, string>;
+  /** Unit baseId -> unlabelled arrays (`unknown.6`) that do mean the unit arrived, for units with no `finished`. */
+  countUnlabelledArrays?: Record<string, string[]>;
+  /** Price cuts that start when the player completes a building. */
+  discounts?: Discount[];
+}
+export interface Discount {
+  civ: string; // aoe4world civilization id, e.g. "rus"
+  unit: string; // unit baseId
+  afterBuilding: string; // building baseId; the cut applies to what is paid for after it is completed
+  factor: number; // 0.5 = half price
 }
 interface MapsFile {
   analyse: string[];
@@ -87,11 +105,19 @@ export interface InvestmentConfig {
   landmarkFromAge: Map<string, AgeWindow>; // building baseId -> age it is built in
   freeUnitPrices: Record<string, number>;
   ageUpDefaults: Record<NextAge, number>;
+  nameAliases: Record<string, string>;
+  countUnlabelledArrays: Record<string, string[]>;
+  discounts: Discount[];
+  /** Civ tags that end some icon names (`_sco`, `_mon`, ...), stripped before matching by name. */
+  civSuffixes: Set<string>;
   counterpart: Map<string, Variation[]>; // `${kind}:${baseId}` -> all variations
   mapTypeOf: Map<string, string>;
   analyseTypes: Set<string>;
   unlistedMapType: string;
 }
+
+/** Civ tags the game uses at the end of icon and attribute names, besides the data repo's own abbreviations. */
+const ICON_CIV_TAGS = ['abb', 'chi', 'sul', 'eng', 'fre', 'hre', 'mon', 'rus', 'jpn', 'byz', 'mal', 'ott', 'lan', 'tem'];
 
 const fp = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 12);
 const key = (kind: string, baseId: string) => `${kind}:${baseId}`;
@@ -142,6 +168,10 @@ export function loadInvestmentConfig(dir: string, version = METRIC_VERSION): Inv
     landmarkFromAge,
     freeUnitPrices: ov.freeUnitPrices,
     ageUpDefaults: ov.ageUpDefaults,
+    nameAliases: ov.nameAliases ?? {},
+    countUnlabelledArrays: ov.countUnlabelledArrays ?? {},
+    discounts: ov.discounts ?? [],
+    civSuffixes: new Set([...Object.values(gd.civs), ...ICON_CIV_TAGS]),
     counterpart,
     mapTypeOf,
     analyseTypes: new Set(maps.analyse),
@@ -185,7 +215,9 @@ export interface CountedItem {
   id: string;
   n: number;
   cost: number; // per item
-  by: 'listed' | 'override' | 'counterpart' | 'unpriced';
+  by: 'listed' | 'override' | 'counterpart' | 'unpriced' | 'discounted';
+  /** Present when the entry's game ID wasn't in the data and it was matched by its icon name instead. */
+  via?: 'name';
 }
 export interface WindowResult {
   window: AgeWindow;
@@ -207,7 +239,10 @@ export interface PlayerResult {
   windows: WindowResult[];
 }
 export interface Diagnostics {
-  unknownPbgids: { icon: string; type: string; n: number }[];
+  /** Entries matched neither by game ID nor by name: never counted. */
+  unknownPbgids: { icon: string; type: string; civ: string; pbgids: number[]; n: number }[];
+  /** Entries whose game ID isn't in the data, matched by icon name instead (counted ones only). */
+  matchedByName: { civ: string; type: string; icon: string; pbgid: number | null; matched: string; otherCiv: boolean; n: number }[];
   uncategorized: { kind: Kind; id: string; n: number }[];
   freeUnits: { civ: string; id: string; by: string; cost: number; n: number; arrays: string[] }[];
   unitsWithoutFinished: { civ: string; id: string; arrays: string[] }[];
@@ -264,6 +299,56 @@ function variationFor(config: InvestmentConfig, pbgid: number | undefined, abbr:
   return (abbr && vs.find((v) => v.civs.includes(abbr))) || vs[0] || null;
 }
 
+/** Build order entry types that can be matched by name, and the data kind each one means. */
+const KIND_OF_TYPE: Record<string, Kind> = { Unit: 'unit', Building: 'building', Upgrade: 'technology' };
+
+/**
+ * An icon name reduced to a data baseId, plus the tier it carries if any:
+ * "iron_pagoda_2" -> iron-pagoda, tier 2; "building_sacred_grove" -> sacred-grove;
+ * "fish_pond_sco" -> fish-pond. Aliases in overrides.json cover names that
+ * differ from the data's own ("ram" -> battering-ram).
+ */
+export function nameToBaseId(config: InvestmentConfig, kind: Kind, iconName: string, abbr?: string): { baseId: string; tier: number | null } {
+  const parts = iconName.toLowerCase().replace(/^(building|unit|upgrade|tech|technology)_/, '').split('_').filter(Boolean);
+  const last = () => parts[parts.length - 1] ?? '';
+  if (parts.length > 1 && config.civSuffixes.has(last())) parts.pop();
+  let tier: number | null = null;
+  if (parts.length > 1 && /^\d$/.test(last())) tier = Number(parts.pop());
+  const name = parts.join('-');
+  // A civ's own alias first ("jin:unit:horse-archer" is the Mohe Tribesman), then the general one.
+  const civAlias = abbr ? config.nameAliases[`${abbr}:${key(kind, name)}`] : undefined;
+  return { baseId: civAlias ?? config.nameAliases[key(kind, name)] ?? name, tier };
+}
+
+/**
+ * Fallback when the game ID isn't in the data: some units come with more than
+ * one ID in the game and the data lists only one. Prefer this civ's variation
+ * at the icon's tier, then this civ's earliest, then another civ's (otherCiv).
+ */
+function variationByName(config: InvestmentConfig, e: SummaryBuildEntry, abbr: string | undefined): { v: Variation; otherCiv: boolean } | null {
+  const kind = KIND_OF_TYPE[e.type ?? ''];
+  if (!kind) return null;
+  const { baseId, tier } = nameToBaseId(config, kind, icon(e), abbr);
+  const all = config.counterpart.get(key(kind, baseId));
+  if (!all || all.length === 0) return null;
+  const mine = all.filter((x) => abbr && x.civs.includes(abbr));
+  const pool = mine.length ? mine : all;
+  const atTier = tier !== null ? pool.find((x) => x.age === tier) : undefined;
+  const earliest = [...pool].sort((a, b) => (a.age ?? 9) - (b.age ?? 9))[0];
+  const v = atTier ?? earliest;
+  return v ? { v, otherCiv: mine.length === 0 } : null;
+}
+
+type Resolved = { e: SummaryBuildEntry; v: Variation | null; via: 'pbgid' | 'name' | null; otherCiv: boolean };
+
+function resolveEntry(config: InvestmentConfig, e: SummaryBuildEntry, abbr: string | undefined): Resolved {
+  const byId = variationFor(config, e.pbgid, abbr);
+  if (byId) return { e, v: byId, via: 'pbgid', otherCiv: false };
+  const byName = variationByName(config, e, abbr);
+  if (byName) return { e, v: byName.v, via: 'name', otherCiv: byName.otherCiv };
+  return { e, v: null, via: null, otherCiv: false };
+}
+
 function price(config: InvestmentConfig, v: Variation, abbr: string | undefined): { cost: number; by: CountedItem['by'] } {
   // Only units get a stand-in price: a building or upgrade that costs nothing
   // (Sacred Grove, for one) really is free.
@@ -277,14 +362,26 @@ function price(config: InvestmentConfig, v: Variation, abbr: string | undefined)
   return { cost: 0, by: 'unpriced' };
 }
 
-/** Completion times that count, for a kind: buildings by completion, the rest by finish. */
-function completions(kind: Kind, e: SummaryBuildEntry): { times: number[]; from: string } {
+/**
+ * Completion times that count. Only things that were completed are charged
+ * (Andrei, 21 Nov 2026: siege can be started in the field and never finished).
+ *   buildings: `constructed`, the completion time (a cancelled placement has only `destroyed`)
+ *   units and technologies: `finished`
+ *   units with no `finished`: `constructed`, the same completion record, for siege built in the field
+ *   then the unlabelled arrays overrides.json names for that unit (countUnlabelledArrays:
+ *   Rus warrior monks from the Abbey of the Trinity record only `unknown.6`)
+ * Any other unlabelled array (`unknown.6`, `unknown.14`, ...) and `destroyed` never
+ * count; units that have only those are listed in the report instead.
+ */
+function completions(kind: Kind, e: SummaryBuildEntry, unlabelledOk: string[] = []): { times: number[]; from: string } {
   if (kind === 'building') return { times: nums(e.constructed), from: 'constructed' };
   const fin = nums(e.finished);
   if (fin.length || kind === 'technology') return { times: fin, from: 'finished' };
-  // Units with no `finished`: fall back to whatever else records them (reported in diagnostics).
-  const other = Object.entries(arrays(e)).filter(([k]) => k !== 'destroyed' && k !== 'constructed');
-  return { times: other.flatMap(([, v]) => v), from: other.map(([k]) => k).join('+') || 'none' };
+  const built = nums(e.constructed);
+  if (built.length) return { times: built, from: 'constructed' };
+  const named = Object.entries(arrays(e)).filter(([k]) => unlabelledOk.includes(k));
+  if (named.length) return { times: named.flatMap(([, v]) => v), from: named.map(([k]) => k).join('+') };
+  return { times: [], from: 'none' };
 }
 
 const round3 = (x: number) => Math.round(x * 1000) / 1000;
@@ -310,7 +407,7 @@ export function analyzeGame(summary: Summary, config: InvestmentConfig): GameAna
   const mapType = listedType ?? config.unlistedMapType;
   const durationSec = Math.max(summary.duration ?? 0, ...summary.players.map((p) => p._stats?.gt ?? 0));
   const diag: Diagnostics = {
-    unknownPbgids: [], uncategorized: [], freeUnits: [], unitsWithoutFinished: [], cancelledPlacements: [],
+    unknownPbgids: [], matchedByName: [], uncategorized: [], freeUnits: [], unitsWithoutFinished: [], cancelledPlacements: [],
     destroyedAfterBuild: [], bundles: [], ageUps: [], goldenHordeCarts: [], entryTypes: {}, timestampArrays: {},
     movedToAvailableAge: [], earlierThanData: [],
   };
@@ -335,8 +432,18 @@ function analyzePlayer(p: SummaryPlayer, config: InvestmentConfig, durationSec: 
   const resolved = bo.map((e) => {
     diag.entryTypes[e.type ?? '?'] = (diag.entryTypes[e.type ?? '?'] ?? 0) + 1;
     for (const k of Object.keys(arrays(e))) diag.timestampArrays[k] = (diag.timestampArrays[k] ?? 0) + 1;
-    return { e, v: variationFor(config, e.pbgid, abbr) };
+    return resolveEntry(config, e, abbr);
   });
+
+  // Price cuts this player unlocked: unit baseId -> factor, from the first completion of the building.
+  const cutFor = new Map<string, { factor: number; from: number }>();
+  for (const d of config.discounts) {
+    if (d.civ !== p.civilization) continue;
+    const times = resolved
+      .filter(({ v }) => v?.kind === 'building' && v.baseId === d.afterBuilding)
+      .flatMap(({ e }) => nums(e.constructed));
+    if (times.length) cutFor.set(d.unit, { factor: d.factor, from: Math.min(...times) });
+  }
 
   // ── Age-up times and the age-up item each one bought ────────────
   const ageTime: Partial<Record<NextAge, number>> = {};
@@ -345,8 +452,11 @@ function analyzePlayer(p: SummaryPlayer, config: InvestmentConfig, durationSec: 
     const actionTime = nums(actions[w.action])[0] ?? null;
     // Candidates: an age-up landmark built from this age, or an age-up technology researched in it.
     const cands: { id: string; kind: Kind; t: number; cost: number }[] = [];
-    for (const { e, v } of resolved) {
-      if (!v) continue;
+    for (const { e, v, via } of resolved) {
+      // Age-ups come from game-ID matches only: they were checked against the
+      // game's own age-up times for every civ, and a name match could add a
+      // duplicate (a packed landmark, say).
+      if (!v || via !== 'pbgid') continue;
       const isLandmark = v.kind === 'building' && config.landmarkFromAge.get(v.baseId) === w.window && v.cost > 50;
       const isTech = v.kind === 'technology' && v.ageUp === true && v.age === w.fromAge;
       if (!isLandmark && !isTech) continue;
@@ -386,17 +496,25 @@ function analyzePlayer(p: SummaryPlayer, config: InvestmentConfig, durationSec: 
   }
 
   // ── Charge every counted item to its window ─────────────────────
-  const itemIndex = new Map<string, CountedItem>(); // `${window}|${bucket}|${id}|${by}`
+  const itemIndex = new Map<string, CountedItem>(); // `${window}|${bucket}|${id}|${by}|${via}`
   const tally = <T extends { n: number }>(list: T[], match: (x: T) => boolean, make: () => T, by = 1) => {
     const hit = list.find(match);
     if (hit) hit.n += by;
     else list.push({ ...make(), n: by });
   };
 
-  for (const { e, v } of resolved) {
+  for (const { e, v, via, otherCiv } of resolved) {
     const type = e.type ?? '?';
     if (!v) {
-      if (type !== 'Age') tally(diag.unknownPbgids, (x) => x.icon === icon(e), () => ({ icon: icon(e), type, n: 1 }));
+      if (type !== 'Age') {
+        const hit = diag.unknownPbgids.find((x) => x.icon === icon(e) && x.type === type && x.civ === p.civilization);
+        if (hit) {
+          hit.n++;
+          if (typeof e.pbgid === 'number' && !hit.pbgids.includes(e.pbgid) && hit.pbgids.length < 3) hit.pbgids.push(e.pbgid);
+        } else {
+          diag.unknownPbgids.push({ icon: icon(e), type, civ: p.civilization, pbgids: typeof e.pbgid === 'number' ? [e.pbgid] : [], n: 1 });
+        }
+      }
       continue;
     }
     const k = key(v.kind, v.baseId);
@@ -440,7 +558,8 @@ function analyzePlayer(p: SummaryPlayer, config: InvestmentConfig, durationSec: 
       continue;
     }
 
-    const { times, from } = completions(v.kind, e);
+    const { times, from } = completions(v.kind, e, v.kind === 'unit' ? config.countUnlabelledArrays[v.baseId] : undefined);
+    let chargedByName = 0;
     if (v.kind === 'unit' && nums(e.finished).length === 0) {
       diag.unitsWithoutFinished.push({ civ: p.civilization, id: v.baseId, arrays: Object.keys(arrays(e)) });
     }
@@ -475,16 +594,26 @@ function analyzePlayer(p: SummaryPlayer, config: InvestmentConfig, durationSec: 
             () => ({ civ: p.civilization, id: v.baseId, window: from, n: 0 }));
         }
       }
-      win.spend[bucket] += cost;
-      const ik = `${win.window}|${bucket}|${v.baseId}|${by}`;
+      // A price cut unlocked by a building completed before this was paid for.
+      const cut = v.kind === 'unit' ? cutFor.get(v.baseId) : undefined;
+      const itemCost = cut && paid >= cut.from ? Math.round(cost * cut.factor) : cost;
+      const itemBy: CountedItem['by'] = itemCost !== cost ? 'discounted' : by;
+      win.spend[bucket] += itemCost;
+      if (via === 'name') chargedByName++;
+      const ik = `${win.window}|${bucket}|${v.baseId}|${itemBy}|${via}`;
       const item = itemIndex.get(ik);
       if (item) item.n++;
       else {
-        const created: CountedItem = { bucket, id: v.baseId, n: 1, cost, by };
+        const created: CountedItem = { bucket, id: v.baseId, n: 1, cost: itemCost, by: itemBy, ...(via === 'name' ? { via: 'name' as const } : {}) };
         itemIndex.set(ik, created);
         win.items.push(created);
       }
       if (by === 'unpriced' && !win.flags.includes('unpriced_free_unit')) win.flags.push('unpriced_free_unit');
+    }
+    if (chargedByName) {
+      const matched = key(v.kind, v.baseId);
+      tally(diag.matchedByName, (x) => x.civ === p.civilization && x.icon === icon(e) && x.matched === matched,
+        () => ({ civ: p.civilization, type, icon: icon(e), pbgid: typeof e.pbgid === 'number' ? e.pbgid : null, matched, otherCiv, n: 0 }), chargedByName);
     }
   }
 

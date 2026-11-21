@@ -182,7 +182,7 @@ function printGame(a: GameAnalysis) {
 function printItems(a: GameAnalysis) {
   for (const p of a.players) {
     for (const w of p.windows) {
-      console.log(`    ${p.name} ${w.window}: ${w.items.map((i) => `${i.n}x ${i.id} @${i.cost}${i.by === 'listed' ? '' : ` (${i.by})`}`).join(', ') || 'nothing counted'}`);
+      console.log(`    ${p.name} ${w.window}: ${w.items.map((i) => `${i.n}x ${i.id} @${i.cost}${i.by === 'listed' ? '' : ` (${i.by})`}${i.via === 'name' ? ' (by name)' : ''}`).join(', ') || 'nothing counted'}`);
     }
   }
 }
@@ -213,7 +213,7 @@ function printReport(all: { a: GameAnalysis }[]) {
   for (const [k, e] of free) line(`${k}: ${e.n} counted in ${e.games} player-game(s), timestamps from ${[...e.arrays].join(', ')}`);
   const nofin = d((x) => x.unitsWithoutFinished) as unknown as Diagnostics['unitsWithoutFinished'];
   if (nofin.length) {
-    line('Counted units with no "finished" times (counted from the arrays shown):');
+    line('Units with no "finished" times, and the arrays they do have (only "constructed", siege completed in the field, is counted):');
     const seen = new Set<string>();
     for (const u of nofin) {
       const k = `${u.civ} ${u.id}: ${u.arrays.join(', ') || 'no timestamps at all'}`;
@@ -271,7 +271,35 @@ function printReport(all: { a: GameAnalysis }[]) {
     for (const x of list) m.set(k(x), (m.get(k(x)) ?? 0) + x.n);
     return [...m].sort((a, b) => b[1] - a[1]).map(([id, n]) => `${id} ${n}`).join(', ') || 'none';
   };
-  line(`build order entries with no match in game-data.json: ${agg(unk, (x) => `${x.type}:${x.icon}`)}`);
+  const byName = d((x) => x.matchedByName) as unknown as Diagnostics['matchedByName'];
+  line('matched by icon name because the game ID is not in game-data.json (counted; check each match):');
+  if (byName.length === 0) line('  none');
+  const nameRows = new Map<string, { n: number; civs: Set<string>; pbgids: Set<number>; other: boolean }>();
+  for (const x of byName) {
+    const k = `${x.type}:${x.icon} -> ${x.matched}`;
+    const r = nameRows.get(k) ?? { n: 0, civs: new Set<string>(), pbgids: new Set<number>(), other: false };
+    r.n += x.n; r.civs.add(x.civ); if (x.pbgid !== null) r.pbgids.add(x.pbgid); r.other ||= x.otherCiv;
+    nameRows.set(k, r);
+  }
+  for (const [k, r] of [...nameRows].sort((a, b) => b[1].n - a[1].n)) {
+    line(`  ${k}: ${r.n} counted; ${[...r.civs].join(', ')}; game id ${[...r.pbgids].slice(0, 3).join(', ') || 'none'}${r.other ? '; priced from another civ' : ''}`);
+  }
+  line('no match by game ID or by name (never counted):');
+  const unkRows = new Map<string, { type: string; n: number; civs: Set<string>; pbgids: Set<number> }>();
+  for (const x of unk) {
+    const k = `${x.type}:${x.icon}`;
+    const r = unkRows.get(k) ?? { type: x.type, n: 0, civs: new Set<string>(), pbgids: new Set<number>() };
+    r.n += x.n; r.civs.add(x.civ); x.pbgids.forEach((g) => r.pbgids.add(g));
+    unkRows.set(k, r);
+  }
+  const typeOrder = ['Unit', 'Building', 'Upgrade'];
+  const rank = (t: string) => (typeOrder.indexOf(t) === -1 ? typeOrder.length : typeOrder.indexOf(t));
+  const unkSorted = [...unkRows].sort((a, b) => rank(a[1].type) - rank(b[1].type) || b[1].n - a[1].n);
+  if (unkSorted.length === 0) line('  none');
+  for (const t of [...new Set(unkSorted.map(([, r]) => r.type))]) {
+    const rows = unkSorted.filter(([, r]) => r.type === t);
+    line(`  ${t}: ${rows.map(([k, r]) => `${k.slice(t.length + 1)} ${r.n} (${[...r.civs].slice(0, 3).join('/')}${r.civs.size > 3 ? '/...' : ''}${t === 'Unit' || t === 'Building' ? `; id ${[...r.pbgids].slice(0, 2).join(', ') || 'none'}` : ''})`).join(', ')}`);
+  }
   line(`units or buildings in no category list: ${agg(unc, (x) => `${x.kind}:${x.id}`)}`);
   const unlisted = [...new Set(all.filter(({ a }) => !a.mapListed).map(({ a }) => a.map))];
   line(`maps not in maps.json (analysed as land): ${unlisted.join(', ') || 'none'}`);
