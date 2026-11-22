@@ -11,13 +11,38 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<div class="shell">
+<div class="shell view-games" id="shell">
   <header class="head">
-    <h1>Military investment</h1>
+    <div class="head-top">
+      <h1>Military investment</h1>
+      <a class="pin-chip" id="pin-chip" href="#view=players">Pin a player</a>
+    </div>
+    <nav class="views" id="views" aria-label="Pages">
+      <a href="#" data-view="games" aria-current="page">Games</a>
+      <a href="#view=players" data-view="players">Players</a>
+    </nav>
     <p class="sub">What each player spent on military in an age, counted in age-ups: 1.0x is the cost of their next age-up. Production buildings, units and defenses count. Walls are listed on their own.</p>
   </header>
 
+  <!-- Players: the tracked people (players.json plus anyone added by link) and a search for anyone else. -->
+  <section class="players" id="players" aria-label="Players" hidden>
+    <div class="pl-head">
+      <h2>Players</h2>
+      <p class="pl-note" id="pl-note">Loading…</p>
+    </div>
+    <label class="pl-find">Find anyone in the analysed games, opponents included
+      <input id="find" type="search" placeholder="Name" autocomplete="off">
+    </label>
+    <ol class="pl-found" id="pl-found" hidden></ol>
+    <ol class="pl-list" id="pl-list"></ol>
+    <p class="pl-add">To add someone, run the Backfill Player action on GitHub with their aoe4world profile link. Their last two years of ranked games come in over the next few days.</p>
+  </section>
+
+  <!-- A person's profile: who they are, how they invest in each age, by civ, and their record. Their games follow below. -->
+  <section class="prof" id="profile" aria-label="Player profile" hidden></section>
+
   <div class="pane-list">
+  <h2 class="games-title" id="games-title" hidden>Games</h2>
   <nav class="tabs" id="tabs" aria-label="Age">
     <button type="button" data-window="dark" aria-pressed="true">Dark <span>→ Feudal</span></button>
     <button type="button" data-window="feudal" aria-pressed="false">Feudal <span>→ Castle</span></button>
@@ -25,8 +50,12 @@
   </nav>
 
   <main class="page">
+    <div class="who-switch" id="who-switch" role="group" aria-label="Whose games" hidden>
+      <button type="button" data-who="pinned" aria-pressed="true"><span class="pin-ico" aria-hidden="true"></span><span id="who-name">Pinned</span></button>
+      <button type="button" data-who="all" aria-pressed="false">Everyone</button>
+    </div>
     <section class="filters" aria-label="Filters">
-      <label>Who
+      <label class="f-group">Who
         <select id="group"><option value="all">Everyone</option><option value="tracked">Tracked players</option><option value="untracked">Opponents only</option></select>
       </label>
       <label>Civ
@@ -46,7 +75,7 @@
           <option value="date">Date played</option>
         </select>
       </label>
-      <label class="wide">Player
+      <label class="wide f-q">Player
         <input id="q" type="search" placeholder="Name" autocomplete="off">
       </label>
       <button type="button" id="dir" aria-label="Sort direction">Highest first</button>
