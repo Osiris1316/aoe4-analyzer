@@ -14,6 +14,13 @@
  *        a range on an earlier window keeps only player-games whose earlier row is in it;
  *        a range on this window filters the list. ratio: combined|production|units|defense|walls
  *     &hm=<ratio>   which ratio the histogram shows when this window has no range
+ *   GET /api/game?id=<game_id>[&version=v1] -> every row of one game (both players,
+ *     every age window) and the bar scale of each window, for the desktop board
+ *   Each row carries the opponent's row for the same game and age window as opp_*
+ *   columns (null when the opponent never reached that age), so a card can show
+ *   both players. `scale` is the bar scale for the window: the 95th percentile of
+ *   the combined ratio, rounded up to a whole age-up, so bars line up across cards
+ *   and don't change with the filters. The histogram's bucket width fits the scale.
  *
  * Only SELECTs with bound parameters; sort columns come from a fixed list.
  */
@@ -96,7 +103,26 @@ const ORDER: Record<string, number> = { dark: 1, feudal: 2, castle: 3 };
 const RATIOS: Record<string, string> = {
   combined: 'ratio_combined', production: 'ratio_production', units: 'ratio_units', defense: 'ratio_defense', walls: 'ratio_walls',
 };
-const HIST_BUCKETS = 20; // tenths of the age-up cost, 0% to 200%; the last bucket holds 200% and up
+/**
+ * The bar scale for a window, in age-ups: the 95th percentile of the combined
+ * ratio across the whole window (not the filtered list), rounded up, at least 1.
+ * The few bars past it are drawn full with an overflow mark.
+ */
+async function windowScale(db: D1Database, version: string, window: string): Promise<number> {
+  const row = await db.prepare(`SELECT ratio_combined AS v FROM investment_results
+      WHERE metric_version = ? AND age_window = ?
+      ORDER BY ratio_combined DESC
+      LIMIT 1 OFFSET (SELECT CAST(COUNT(*) * 0.05 AS INTEGER) FROM investment_results WHERE metric_version = ? AND age_window = ?)`)
+    .bind(version, window, version, window)
+    .first<{ v: number }>();
+  return Math.max(1, Math.ceil((row?.v ?? 1) - 1e-9));
+}
+
+/** Histogram buckets that fit the scale: tenths up to 2 age-ups, quarters up to 4, halves beyond. */
+function histogramStep(scale: number): { width: number; count: number } {
+  const width = scale <= 2 ? 0.1 : scale <= 4 ? 0.25 : 0.5;
+  return { width, count: Math.round(scale / width) }; // the bucket at `count` holds the scale and up
+}
 
 interface Range { window: string; metric: string; lo: number; hi: number | null }
 
@@ -169,27 +195,58 @@ async function rows(db: D1Database, url: URL): Promise<Response> {
   const limit = Math.min(Math.max(Number(p.get('limit')) || 200, 1), MAX_ROWS);
   const histMetric = own?.metric ?? (RATIOS[p.get('hm') || ''] ? (p.get('hm') as string) : 'combined');
   const histCol = RATIOS[histMetric];
+  const scale = await windowScale(db, version, window);
+  const step = histogramStep(scale);
 
+  // The opponent's row for the same game and age window rides along as opp_*.
   const list = await db.prepare(`SELECT r.game_id, r.profile_id, r.age_window, r.player_name, r.person, r.player_group, r.civ,
       r.opponent_profile_id, r.opponent_name, r.opponent_civ, r.result, r.map, r.map_type, r.started_at, r.duration_sec,
       r.window_start_sec, r.window_end_sec, r.reached_next_age, r.next_age_cost, r.next_age_cost_source,
       r.spend_production, r.spend_units, r.spend_defense, r.spend_walls,
       r.ratio_production, r.ratio_units, r.ratio_defense, r.ratio_combined, r.ratio_walls,
-      r.items_json, r.flags_json
+      r.items_json, r.flags_json,
+      o.player_group AS opp_group, o.person AS opp_person, o.window_start_sec AS opp_window_start_sec, o.window_end_sec AS opp_window_end_sec,
+      o.reached_next_age AS opp_reached_next_age, o.next_age_cost AS opp_next_age_cost, o.next_age_cost_source AS opp_next_age_cost_source,
+      o.spend_production AS opp_spend_production, o.spend_units AS opp_spend_units, o.spend_defense AS opp_spend_defense, o.spend_walls AS opp_spend_walls,
+      o.ratio_production AS opp_ratio_production, o.ratio_units AS opp_ratio_units, o.ratio_defense AS opp_ratio_defense,
+      o.ratio_combined AS opp_ratio_combined, o.ratio_walls AS opp_ratio_walls,
+      o.items_json AS opp_items_json, o.flags_json AS opp_flags_json
     FROM investment_results r
+    LEFT JOIN investment_results o
+      ON o.metric_version = r.metric_version AND o.game_id = r.game_id
+     AND o.profile_id = r.opponent_profile_id AND o.age_window = r.age_window
     WHERE ${listWhere}
     ORDER BY r.${sortCol} ${dir}, r.game_id DESC
     LIMIT ?`).bind(...binds, limit).all();
   const total = await db.prepare(`SELECT COUNT(*) AS n FROM investment_results r WHERE ${listWhere}`).bind(...binds).first<{ n: number }>();
-  const hist = await db.prepare(`SELECT MIN(CAST(r.${histCol} * 10 + 0.000001 AS INTEGER), ${HIST_BUCKETS}) AS b, COUNT(*) AS n
-    FROM investment_results r WHERE ${inPathWhere} GROUP BY b ORDER BY b`).bind(...inPathBinds).all<{ b: number; n: number }>();
+  const hist = await db.prepare(`SELECT MIN(CAST(r.${histCol} / ? + 0.000001 AS INTEGER), ?) AS b, COUNT(*) AS n
+    FROM investment_results r WHERE ${inPathWhere} GROUP BY b ORDER BY b`).bind(step.width, step.count, ...inPathBinds).all<{ b: number; n: number }>();
   const inPath = hist.results.reduce((s, h) => s + h.n, 0);
 
   return json({
-    version, window, rows: list.results, total: total?.n ?? 0, inPath,
-    histogram: { metric: histMetric, bucketWidth: 0.1, lastBucketIsOpen: true, buckets: hist.results },
+    version, window, rows: list.results, total: total?.n ?? 0, inPath, scale,
+    histogram: { metric: histMetric, bucketWidth: step.width, buckets: step.count, lastBucketIsOpen: true, counts: hist.results },
     path, own,
   });
+}
+
+/** One game whole: both players, every age window, and each window's bar scale. */
+async function game(db: D1Database, url: URL): Promise<Response> {
+  const p = url.searchParams;
+  const id = Number(p.get('id'));
+  if (!Number.isSafeInteger(id) || id <= 0) return json({ error: 'id must be a game id' }, 400);
+  const version = p.get('version') || (await newestVersion(db));
+  if (!version) return json({ version: null, game_id: id, rows: [], scales: {} });
+  const list = await db.prepare(`SELECT game_id, profile_id, age_window, player_name, person, player_group, civ,
+      opponent_profile_id, opponent_name, opponent_civ, result, map, map_type, started_at, duration_sec,
+      window_start_sec, window_end_sec, reached_next_age, next_age_cost, next_age_cost_source,
+      spend_production, spend_units, spend_defense, spend_walls,
+      ratio_production, ratio_units, ratio_defense, ratio_combined, ratio_walls, items_json, flags_json
+    FROM investment_results WHERE metric_version = ? AND game_id = ?
+    ORDER BY profile_id, CASE age_window WHEN 'dark' THEN 1 WHEN 'feudal' THEN 2 ELSE 3 END`).bind(version, id).all();
+  const scales: Record<string, number> = {};
+  for (const w of ['dark', 'feudal', 'castle']) scales[w] = await windowScale(db, version, w);
+  return json({ version, game_id: id, rows: list.results, scales });
 }
 
 export default {
@@ -199,6 +256,7 @@ export default {
     try {
       if (url.pathname === '/api/meta') return await meta(env.DB);
       if (url.pathname === '/api/rows') return await rows(env.DB, url);
+      if (url.pathname === '/api/game') return await game(env.DB, url);
     } catch (err) {
       console.error('api error', err);
       return json({ error: 'database error' }, 500);
