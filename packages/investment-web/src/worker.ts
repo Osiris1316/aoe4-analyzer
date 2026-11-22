@@ -15,6 +15,7 @@
  *        a range on an earlier window keeps only games where that side's earlier row is in it;
  *        a range on this window filters the list. ratio: combined|production|units|defense|walls
  *     &hs=player|opp  whose spread the histogram shows; &hm=<ratio> which ratio, when that side has no range
+ *     &result=win|loss  only games the row's player won (or lost)
  *     &player=<id>[,<id>]  only these accounts (a person's alts, or the pinned player)
  *     &vod=1  only games where either player has a Twitch VOD
  *   GET /api/game?id=<game_id>[&version=v1] -> every row of one game (both players,
@@ -35,6 +36,7 @@ import { player, playerFilter, players } from './players';
 
 interface D1Result<T> {
   results: T[];
+  meta?: { rows_read?: number };
 }
 interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
@@ -46,6 +48,30 @@ interface D1Database {
 }
 export interface Env {
   DB: D1Database;
+}
+
+/**
+ * D1 counts rows scanned, and the free plan allows a few million a day across
+ * the account. Every statement goes through this wrapper, which adds up D1's own
+ * rows_read; each response carries the total (X-D1-Rows-Read) and the Worker
+ * logs it, so the real cost of a page shows in the Cloudflare logs.
+ */
+function counted(db: D1Database): { db: D1Database; reads: () => number; queries: () => number } {
+  let reads = 0, queries = 0;
+  const wrap = (st: D1PreparedStatement): D1PreparedStatement => ({
+    bind: (...v: unknown[]) => wrap(st.bind(...v)),
+    async all<T>() {
+      const r = await st.all<T>();
+      queries++; reads += r.meta?.rows_read ?? 0;
+      return r;
+    },
+    async first<T>() {
+      const r = await st.all<T>();
+      queries++; reads += r.meta?.rows_read ?? 0;
+      return (r.results[0] ?? null) as T | null;
+    },
+  });
+  return { db: { prepare: (sql: string) => wrap(db.prepare(sql)) }, reads: () => reads, queries: () => queries };
 }
 
 const WINDOWS = new Set(['dark', 'feudal', 'castle']);
@@ -71,7 +97,39 @@ const json = (body: unknown, status = 200) =>
     },
   });
 
+/**
+ * The stored summary (migration 004, written by the analysis step): per metric
+ * version, each age's bar scale, civs, groups, game count and last update. A few
+ * rows instead of scans of the whole results table on every request. Kept in the
+ * isolate for a minute. Null when the table doesn't exist yet; any missing piece
+ * is computed live instead.
+ */
+type Stored = Map<string, Record<string, unknown>>;
+let storedCache: { at: number; data: Stored | null } | null = null;
+async function stored(db: D1Database): Promise<Stored | null> {
+  if (storedCache && Date.now() - storedCache.at < 60_000) return storedCache.data;
+  let data: Stored | null = null;
+  try {
+    const rows = (await db.prepare('SELECT metric_version, key, value FROM investment_summary').all<{ metric_version: string; key: string; value: string }>()).results;
+    data = new Map();
+    for (const r of rows) {
+      const m = data.get(r.metric_version) ?? {};
+      try { m[r.key] = JSON.parse(r.value); } catch { /* a bad value is ignored; that piece is computed live */ }
+      data.set(r.metric_version, m);
+    }
+  } catch {
+    data = null; // before migration 004
+  }
+  storedCache = { at: Date.now(), data };
+  return data;
+}
+
 async function newestVersion(db: D1Database): Promise<string | null> {
+  const s = await stored(db);
+  if (s && s.size) {
+    const best = [...s.entries()].filter(([, m]) => typeof m.updated === 'string').sort((a, b) => String(b[1].updated).localeCompare(String(a[1].updated)))[0];
+    if (best) return best[0];
+  }
   const row = await db
     .prepare('SELECT metric_version FROM investment_games GROUP BY metric_version ORDER BY MAX(computed_at) DESC LIMIT 1')
     .first<{ metric_version: string }>();
@@ -79,6 +137,15 @@ async function newestVersion(db: D1Database): Promise<string | null> {
 }
 
 async function meta(db: D1Database): Promise<Response> {
+  // From the stored summary when it's complete for the newest version.
+  const s = await stored(db);
+  const newest = s && s.size ? await newestVersion(db) : null;
+  const m = newest ? s?.get(newest) : undefined;
+  if (m && Array.isArray(m.civs) && Array.isArray(m.groups) && typeof m.games === 'number') {
+    const versions = [...(s as Stored).entries()].map(([version, x]) => ({ version, games: Number(x.games ?? 0), updated: String(x.updated ?? '') }))
+      .sort((a, b) => b.updated.localeCompare(a.updated));
+    return json({ version: newest, versions, civs: m.civs, groups: m.groups, analysedGames: m.games, rows: null, updated: m.updated ?? null });
+  }
   const versions = (await db
     .prepare('SELECT metric_version AS version, COUNT(*) AS games, MAX(computed_at) AS updated FROM investment_games GROUP BY metric_version ORDER BY MAX(computed_at) DESC')
     .all<{ version: string; games: number; updated: string }>()).results;
@@ -117,6 +184,8 @@ const RATIOS: Record<string, string> = {
  * The few bars past it are drawn full with an overflow mark.
  */
 async function windowScale(db: D1Database, version: string, window: string): Promise<number> {
+  const kept = (await stored(db))?.get(version)?.['scale:' + window];
+  if (typeof kept === 'number' && kept >= 1) return kept;
   const row = await db.prepare(`SELECT ratio_combined AS v FROM investment_results
       WHERE metric_version = ? AND age_window = ?
       ORDER BY ratio_combined DESC
@@ -207,6 +276,8 @@ async function rows(db: D1Database, url: URL): Promise<Response> {
   const q = (p.get('q') || '').trim();
   if (q) { where.push('(r.player_name LIKE ? OR r.person LIKE ?)'); binds.push(`%${q}%`, `%${q}%`); }
   if (p.get('reached') === '1') where.push('r.reached_next_age = 1');
+  const result = p.get('result');
+  if (result === 'win' || result === 'loss') { where.push('r.result = ?'); binds.push(result); }
   if (p.get('vod') === '1') {
     where.push(`EXISTS (SELECT 1 FROM games v WHERE v.game_id = r.game_id
       AND (v.p0_twitch_vod_url IS NOT NULL OR v.p1_twitch_vod_url IS NOT NULL))`);
@@ -244,15 +315,18 @@ async function rows(db: D1Database, url: URL): Promise<Response> {
   const sortCol = SORTS[sortOpp ? sortKey.slice(4) : sortKey] ?? 'ratio_combined';
   const dir = p.get('dir') === 'asc' ? 'ASC' : 'DESC';
   // The opponent may not have reached this age: those rows go last either way.
+  // With civs chosen, the unary + keeps SQLite from walking the age-and-ratio index
+  // for its order, so it seeks the civ indexes and reads only those matchups. Without
+  // civs, that index gives the order directly and the list can stop after `limit` rows.
+  const scoped = civs.length > 0 || vs.length > 0;
   const orderBy = sortOpp && sortCol !== 'started_at'
     ? `(o.${sortCol} IS NULL), o.${sortCol} ${dir}`
-    : `r.${sortCol} ${dir}`;
+    : `${scoped ? '+' : ''}r.${sortCol} ${dir}`;
   const limit = Math.min(Math.max(Number(p.get('limit')) || 200, 1), MAX_ROWS);
 
   const histSide: Side = p.get('hs') === 'opp' ? 'opp' : 'player';
   const histMetric = own[histSide]?.metric ?? (RATIOS[p.get('hm') || ''] ? (p.get('hm') as string) : 'combined');
   const histCol = RATIOS[histMetric];
-  const hist = withOwn([histSide === 'player' ? 'opp' : 'player']);
   const scale = await windowScale(db, version, window);
   const step = histogramStep(scale);
 
@@ -278,19 +352,27 @@ async function rows(db: D1Database, url: URL): Promise<Response> {
     WHERE ${list.where}
     ORDER BY ${orderBy}, r.game_id DESC
     LIMIT ?`).bind(...list.binds, limit).all();
-  const total = await db.prepare(`SELECT COUNT(*) AS n FROM investment_results r WHERE ${list.where}`).bind(...list.binds).first<{ n: number }>();
-  // The histogram of one side; the opponent's needs their row (so opponents who never reached this age drop out).
-  const histRows = histSide === 'player'
-    ? await db.prepare(`SELECT MIN(CAST(r.${histCol} / ? + 0.000001 AS INTEGER), ?) AS b, COUNT(*) AS n
-        FROM investment_results r WHERE ${hist.where} GROUP BY b ORDER BY b`).bind(step.width, step.count, ...hist.binds).all<{ b: number; n: number }>()
-    : await db.prepare(`SELECT MIN(CAST(o.${histCol} / ? + 0.000001 AS INTEGER), ?) AS b, COUNT(*) AS n
-        FROM investment_results r JOIN investment_results o
-          ON o.metric_version = r.metric_version AND o.game_id = r.game_id AND o.profile_id = r.opponent_profile_id AND o.age_window = r.age_window
-        WHERE ${hist.where} GROUP BY b ORDER BY b`).bind(step.width, step.count, ...hist.binds).all<{ b: number; n: number }>();
-  // The path alone: the player's histogram already counts it when nothing else narrows it.
-  const inPath = histSide === 'player' && !own.opp
-    ? histRows.results.reduce((s, h) => s + h.n, 0)
-    : (await db.prepare(`SELECT COUNT(*) AS n FROM investment_results r WHERE ${baseWhere}`).bind(...baseBinds).first<{ n: number }>())?.n ?? 0;
+  // One pass over the path for every number beside the list: per histogram bucket,
+  // how many games are in the path, how many the histogram shows (the other side's
+  // range in this age applied) and how many the list keeps (both sides' ranges).
+  const other: Side = histSide === 'player' ? 'opp' : 'player';
+  const cond = (x: { sql: string; binds: unknown[] } | null) => x ?? { sql: '1', binds: [] };
+  const otherOwn = cond(ownSql[other]), histOwn = cond(ownSql[histSide]);
+  const bucketOf = histSide === 'player' ? `r.${histCol}` : `o.${histCol}`;
+  const agg = await db.prepare(`SELECT CASE WHEN ${bucketOf} IS NULL THEN NULL ELSE MIN(CAST(${bucketOf} / ? + 0.000001 AS INTEGER), ?) END AS b,
+        COUNT(*) AS path_n,
+        SUM(CASE WHEN ${bucketOf} IS NOT NULL AND (${otherOwn.sql}) THEN 1 ELSE 0 END) AS hist_n,
+        SUM(CASE WHEN (${otherOwn.sql}) AND (${histOwn.sql}) THEN 1 ELSE 0 END) AS list_n
+      FROM investment_results r
+      ${histSide === 'opp' ? `LEFT JOIN investment_results o
+        ON o.metric_version = r.metric_version AND o.game_id = r.game_id AND o.profile_id = r.opponent_profile_id AND o.age_window = r.age_window` : ''}
+      WHERE ${baseWhere}
+      GROUP BY b ORDER BY b`)
+    .bind(step.width, step.count, ...otherOwn.binds, ...otherOwn.binds, ...histOwn.binds, ...baseBinds)
+    .all<{ b: number | null; path_n: number; hist_n: number; list_n: number }>();
+  const total = { n: agg.results.reduce((t, x) => t + x.list_n, 0) };
+  const inPath = agg.results.reduce((t, x) => t + x.path_n, 0);
+  const histRows = { results: agg.results.filter((x) => x.b !== null && x.hist_n > 0).map((x) => ({ b: x.b as number, n: x.hist_n })) };
 
   return json({
     version, window, rows: rowsResult.results, total: total?.n ?? 0, inPath, scale,
@@ -332,16 +414,23 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'read-only' }, 405);
+    const t0 = Date.now();
+    const c = counted(env.DB);
+    const db = c.db;
+    let res: Response;
     try {
-      if (url.pathname === '/api/meta') return await meta(env.DB);
-      if (url.pathname === '/api/rows') return await rows(env.DB, url);
-      if (url.pathname === '/api/game') return await game(env.DB, url);
-      if (url.pathname === '/api/players') return await players(env.DB, url, json);
-      if (url.pathname === '/api/player') return await player(env.DB, url, json, (v) => allScales(env.DB, v));
+      if (url.pathname === '/api/meta') res = await meta(db);
+      else if (url.pathname === '/api/rows') res = await rows(db, url);
+      else if (url.pathname === '/api/game') res = await game(db, url);
+      else if (url.pathname === '/api/players') res = await players(db, url, json);
+      else if (url.pathname === '/api/player') res = await player(db, url, json, (v) => allScales(db, v));
+      else res = json({ error: 'not found' }, 404);
     } catch (err) {
       console.error('api error', err);
-      return json({ error: 'database error' }, 500);
+      res = json({ error: 'database error' }, 500);
     }
-    return json({ error: 'not found' }, 404);
+    res.headers.set('X-D1-Rows-Read', String(c.reads()));
+    console.log(JSON.stringify({ api: url.pathname, rows_read: c.reads(), queries: c.queries(), ms: Date.now() - t0, q: url.search.slice(0, 300) }));
+    return res;
   },
 };

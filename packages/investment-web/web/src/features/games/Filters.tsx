@@ -43,6 +43,11 @@ export function Filters({ state, update, onePlayer }: { state: ListState; update
           </select>
         </label>
       )}
+      <label className={s.grow}>Result
+        <select value={state.result} onChange={(e) => update({ result: e.target.value as ListState['result'] })}>
+          <option value="">Any result</option><option value="win">Player won</option><option value="loss">Player lost</option>
+        </select>
+      </label>
       <div className={s.field}>
         <span className={s.lab}>Civ</span>
         <CivPicker label="Civ" value={state.civ} civs={meta.civs} onChange={(v) => update({ civ: v })} compact multiple />

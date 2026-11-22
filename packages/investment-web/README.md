@@ -54,6 +54,17 @@ scripts/icons.ts        copies icons and names from the aoe4world data repo
 dist/                   the build (not committed)
 ```
 
+## Rows read (D1 free plan)
+
+D1 counts rows scanned, not rows returned, and the free plan's daily allowance covers the whole account. To keep a study session cheap:
+
+- **Stored summary** (`investment_summary`, migration 004): each age's bar scale, the civs and groups for the filters, the game count and the last update. The analysis step writes it (`markUpdated` every run, a full refresh about once a day; `npx tsx scripts/analyze-investment.ts --summary` forces one). The Worker reads it (a few rows, kept for a minute) and falls back to computing any missing piece live, so the page works before the migration too.
+- **One counting pass**: a search runs two statements, the list and one grouped pass that yields the total, the path count and the histogram together.
+- **Civ indexes**: `(metric_version, age_window, civ, opponent_civ)` and `(metric_version, age_window, opponent_civ)`. With civs chosen, the list's sort is written so SQLite seeks these and reads only those matchups; without civs, the age-and-ratio index gives the order and the list stops after its limit.
+- **Measured**: every API response carries `X-D1-Rows-Read` (D1's own count for that request), and the Worker logs `{api, rows_read, queries, ms}` to the Cloudflare logs.
+
+Still reading per person: `/api/players` and `/api/player` read every row of the people they show. A per-player summary table written by the analysis step is the next step if pro backfills make those pages costly.
+
 ## Deploy
 
 From the repo root:
@@ -62,7 +73,7 @@ From the repo root:
 npx wrangler deploy --config packages/investment-web/wrangler.jsonc
 ```
 
-Wrangler builds the app first (`pnpm --filter @aoe4analyzer/investment-web build`: a type check, then Vite), so this one command is still the whole deploy. After pulling changes to this package, run `pnpm install` once.
+Before the first deploy that uses it, apply migration 004 to v2 (`npx tsx scripts/migrate-v2.ts`, then `--apply`) and fill the summary once (`npx tsx scripts/analyze-investment.ts --summary`). Wrangler builds the app first (`pnpm --filter @aoe4analyzer/investment-web build`: a type check, then Vite), so this one command is still the whole deploy. After pulling changes to this package, run `pnpm install` once.
 
 ## Local development
 

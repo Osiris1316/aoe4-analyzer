@@ -27,6 +27,8 @@ export interface ListState {
   vs: string[];
   q: string;
   reached: boolean;
+  /** Only games the row's player won ('win') or lost ('loss'); '' for any. */
+  result: '' | 'win' | 'loss';
   /** Only games where either player has a Twitch VOD. */
   vod: boolean;
   sort: string;
@@ -43,7 +45,7 @@ export interface ListState {
 }
 
 const DEFAULTS = {
-  window: 'dark', group: 'all', q: '', reached: false, vod: false, sort: 'combined', dir: 'desc', hs: 'player', hm: 'combined', g: '', version: '',
+  window: 'dark', group: 'all', q: '', reached: false, result: '', vod: false, sort: 'combined', dir: 'desc', hs: 'player', hm: 'combined', g: '', version: '',
 } as const;
 
 const civs = (v: string | null) => (v || '').split(',').map((c) => c.trim()).filter(Boolean);
@@ -70,6 +72,7 @@ export function readList(sp: URLSearchParams): ListState {
     vs: civs(sp.get('vs')),
     q: sp.get('q') || '',
     reached: sp.get('reached') === '1',
+    result: sp.get('result') === 'win' ? 'win' : sp.get('result') === 'loss' ? 'loss' : '',
     vod: sp.get('vod') === '1',
     sort: SORTS.includes(sort) ? sort : 'combined',
     dir: sp.get('dir') === 'asc' ? 'asc' : 'desc',
@@ -113,6 +116,7 @@ export function rowsQuery(s: ListState, players: number[] | null): string {
   if (s.q && !players) p.set('q', s.q);
   if (s.reached) p.set('reached', '1');
   if (s.vod) p.set('vod', '1');
+  if (s.result) p.set('result', s.result);
   p.set('hs', s.hs);
   p.set('hm', s.hm);
   for (const w of WINDOWS) {
