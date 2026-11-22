@@ -84,6 +84,30 @@ export async function fetchGamesPage(opts: {
 }
 
 /**
+ * One page of a single player's games, newest first, for the player
+ * backfill. 50 per page (the endpoint's default). `since` keeps
+ * aoe4world's query bounded to the window being backfilled.
+ *
+ * aoe4world (https://aoe4world.com/api, read 21 Nov 2026): `page`, `limit`,
+ * `leaderboard` (kinds like rm_1v1 accepted), `since` (ISO or unix); no
+ * page maximum stated. Their usage rules ask for no bulk crawling, so the
+ * backfill reads each page once and paces the calls.
+ */
+export async function fetchPlayerGamesPage(opts: {
+  profileId: number;
+  leaderboard: string;
+  sinceIso: string;
+  page: number;
+}): Promise<ApiGameListResponse> {
+  const params = new URLSearchParams({
+    leaderboard: opts.leaderboard,
+    since: opts.sinceIso,
+    page: String(opts.page),
+  });
+  return fetchJson<ApiGameListResponse>(`${BASE_API}/players/${opts.profileId}/games?${params.toString()}`);
+}
+
+/**
  * A player's public profile. Only `name` and `profile_id` are relied on;
  * aoe4world does not document the full response shape.
  */

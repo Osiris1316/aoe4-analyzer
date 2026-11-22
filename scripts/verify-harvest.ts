@@ -2,6 +2,7 @@
  * Verify Harvest — read-only check of what discovery + retrieval wrote to v2.
  *
  * Prints the pending_jobs queue by status (with recent failure reasons),
+ * player backfills and how far each has got (migration 003),
  * then for each checked game confirms:
  *   - the games row exists
  *   - two game_player_data pointer rows, raw half filled, derived half empty
@@ -25,6 +26,7 @@ import { gunzipSync } from 'node:zlib';
 import { createD1HttpPipelineDb } from '../packages/core/src/db/d1-http';
 import { createR2Client, gpdBlobKey, summaryBlobKey } from '../packages/core/src/storage/r2';
 import { argValue, intArg, missingD1Vars, readD1Env, refuseV1 } from '../packages/core/src/harvest/env';
+import { tableExists } from '../packages/core/src/harvest/game-queue';
 
 const R2_BUCKET = 'aoe4-analyzer-blobs';
 
@@ -78,6 +80,26 @@ async function main() {
   if (failures.length > 0) {
     console.log('Most recent failures:');
     for (const f of failures) console.log(`  ${f.game_id}: ${(f.error ?? '').split('\n')[0]?.slice(0, 160)}`);
+  }
+
+  // ── Backfills ───────────────────────────────────────────────────
+  if (await tableExists(db, 'backfill_games')) {
+    const rows = await db.getMany<{ profile_id: number; person: string | null; status: string; n: number }>(
+      `SELECT bg.profile_id, t.person, pj.status, COUNT(*) AS n
+       FROM backfill_games bg
+       JOIN pending_jobs pj ON pj.game_id = bg.game_id
+       LEFT JOIN tracked_players t ON t.profile_id = bg.profile_id
+       GROUP BY bg.profile_id, pj.status ORDER BY bg.profile_id, pj.status`,
+    );
+    const byPlayer = new Map<number, { person: string; parts: string[] }>();
+    for (const r of rows) {
+      const e = byPlayer.get(r.profile_id) ?? { person: r.person ?? String(r.profile_id), parts: [] };
+      e.parts.push(`${r.status} ${r.n}`);
+      byPlayer.set(r.profile_id, e);
+    }
+    console.log('\nPlayer backfills (games by status):');
+    if (byPlayer.size === 0) console.log('  (none)');
+    for (const [id, e] of byPlayer) console.log(`  ${e.person} (${id}): ${e.parts.join(', ')}`);
   }
 
   // ── Which games ─────────────────────────────────────────────────

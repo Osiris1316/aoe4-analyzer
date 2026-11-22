@@ -22,6 +22,16 @@
  *   tombstone so discovery never re-queues it. Re-queue by hand with:
  *     UPDATE pending_jobs SET status = 'pending', error = NULL WHERE game_id = …;
  *
+ * Order (migration 003): the regular queue first, oldest first, up to --limit.
+ * Then games queued by a player backfill (backfill_games), newest first, up
+ * to --backfill-limit and within what --limit leaves, so a long backfill
+ * trickles in without delaying new games. If one player's backfill hits
+ * BACKFILL_WALL unavailable games in a row (gone through both players),
+ * their older backfill games are set to 'parked' rather than tried one by
+ * one. Re-queue them with:
+ *     UPDATE pending_jobs SET status = 'pending', error = NULL WHERE status = 'parked';
+ * Without migration 003 there are no backfill games and the order is as before.
+ *
  * Write ordering (two-store consistency): R2 put first (verifies + throws on
  * failure), THEN the D1 row. A mid-game crash leaves at worst an orphan R2
  * object (re-put identically next run), never a D1 pointer to a missing one.
@@ -31,6 +41,7 @@
  * Usage:
  *   npx tsx scripts/retrieve-pending.ts              # retrieve up to DEFAULT_LIMIT
  *   npx tsx scripts/retrieve-pending.ts --limit 3    # tiny-batch control (3 → 5 → 20)
+ *   npx tsx scripts/retrieve-pending.ts --backfill-limit 0   # regular queue only
  *   npx tsx scripts/retrieve-pending.ts --dry-run    # show what would be retrieved
  *
  * Required environment variables:
@@ -57,7 +68,8 @@ import {
   SUMMARY_CONTENT_TYPE,
   type R2Client,
 } from '../packages/core/src/storage/r2';
-import { intArg, missingD1Vars, readD1Env, refuseV1 } from '../packages/core/src/harvest/env';
+import { argValue, intArg, missingD1Vars, readD1Env, refuseV1 } from '../packages/core/src/harvest/env';
+import { tableExists } from '../packages/core/src/harvest/game-queue';
 import type { ApiGameListEntry, ApiGameSummaryResponse } from '../packages/core/src/types/api-responses';
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -72,6 +84,23 @@ const SLEEP_BETWEEN_FETCHES_MS = 5000;
 /** Default max jobs to retrieve per run */
 const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 500;
+
+/**
+ * Default max backfill games per run, within the limit above. The harvest
+ * runs every 2 hours, so 20 a run is up to 240 summaries a day: about four
+ * days for a player with 900 games in two years. The workflow takes it from
+ * the repo variable BACKFILL_PER_RUN. Keep it modest: aoe4world computes each
+ * summary on request and asks API users not to extract in bulk.
+ */
+const DEFAULT_BACKFILL_LIMIT = 20;
+
+/**
+ * This many backfill games in a row for one player, all gone through both
+ * players (404s, not refusals), and the rest of that player's older backfill
+ * games are parked instead of tried. Old games past what aoe4world keeps
+ * would otherwise cost two calls each.
+ */
+const BACKFILL_WALL = 25;
 
 /** Max retries on 429 rate limit */
 const MAX_429_RETRIES = 3;
@@ -357,6 +386,84 @@ async function retrieveOneGame(
   return { gameId, status: 'retrieved', via, summaryBytes: rawBytes.byteLength, summaryGzBytes: gz.byteLength };
 }
 
+// ── Job selection ──────────────────────────────────────────────────────
+
+interface Job {
+  game_id: number;
+  game_list_meta: string;
+  created_at: string;
+  /** The backfilled player who queued it, or null for the regular queue. */
+  backfill_for: number | null;
+}
+
+/**
+ * Regular queue first (oldest first). Backfill games fill what's left of the
+ * limit, up to backfillLimit, newest first across all backfills.
+ */
+async function selectJobs(db: PipelineDb, limit: number, backfillLimit: number, backfillReady: boolean): Promise<Job[]> {
+  if (!backfillReady) {
+    return db.getMany<Job>(
+      `SELECT game_id, game_list_meta, created_at, NULL AS backfill_for
+       FROM pending_jobs
+       WHERE status = 'pending'
+       ORDER BY created_at ASC, game_id ASC
+       LIMIT ?`,
+      [limit],
+    );
+  }
+  const regular = await db.getMany<Job>(
+    `SELECT pj.game_id, pj.game_list_meta, pj.created_at, NULL AS backfill_for
+     FROM pending_jobs pj
+     WHERE pj.status = 'pending'
+       AND NOT EXISTS (SELECT 1 FROM backfill_games bg WHERE bg.game_id = pj.game_id)
+     ORDER BY pj.created_at ASC, pj.game_id ASC
+     LIMIT ?`,
+    [limit],
+  );
+  const room = Math.min(backfillLimit, limit - regular.length);
+  if (room <= 0) return regular;
+  const backfill = await db.getMany<Job>(
+    `SELECT pj.game_id, pj.game_list_meta, pj.created_at, bg.profile_id AS backfill_for
+     FROM backfill_games bg
+     JOIN pending_jobs pj ON pj.game_id = bg.game_id
+     WHERE pj.status = 'pending'
+     ORDER BY bg.started_at DESC, bg.game_id DESC
+     LIMIT ?`,
+    [room],
+  );
+  return [...regular, ...backfill];
+}
+
+async function backfillWaiting(db: PipelineDb): Promise<number> {
+  const row = await db.getOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM backfill_games bg JOIN pending_jobs pj ON pj.game_id = bg.game_id WHERE pj.status = 'pending'`,
+  );
+  return row?.n ?? 0;
+}
+
+/** Park a player's pending backfill games older than `before`. Returns how many. */
+async function parkOlderBackfill(db: PipelineDb, profileId: number, before: string): Promise<number> {
+  const res = await db.run(
+    `UPDATE pending_jobs SET status = 'parked', error = ?
+     WHERE status = 'pending'
+       AND game_id IN (SELECT game_id FROM backfill_games WHERE profile_id = ? AND started_at < ?)`,
+    [`not tried: ${BACKFILL_WALL} newer backfill games in a row were unavailable`, profileId, before],
+  );
+  return res.changes;
+}
+
+/** A whole number from 0 to max (0 is allowed, unlike intArg). */
+function countArg(args: string[], name: string, fallback: number, max: number): number {
+  const v = argValue(args, name);
+  if (v === undefined) return fallback;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n > max) {
+    console.error(`${name} must be a whole number from 0 to ${max}, got "${v}".`);
+    process.exit(1);
+  }
+  return n;
+}
+
 // ── Main ───────────────────────────────────────────────────────────────
 
 const kb = (n: number) => `${Math.round(n / 1024)} KB`;
@@ -366,6 +473,7 @@ async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
   const limit = intArg(args, '--limit', DEFAULT_LIMIT, MAX_LIMIT);
+  const backfillLimit = countArg(args, '--backfill-limit', DEFAULT_BACKFILL_LIMIT, MAX_LIMIT);
 
   // ── Validate environment ────────────────────────────────────────
   const d1Env = readD1Env();
@@ -398,20 +506,17 @@ async function main() {
   console.log(`Database: ${d1Env.databaseId}`);
 
   // ── Fetch pending jobs ──────────────────────────────────────────
-  const pendingJobs = await db.getMany<{
-    game_id: number;
-    game_list_meta: string;
-    created_at: string;
-  }>(
-    `SELECT game_id, game_list_meta, created_at
-     FROM pending_jobs
-     WHERE status = 'pending'
-     ORDER BY created_at ASC, game_id ASC
-     LIMIT ?`,
-    [limit],
-  );
+  const backfillReady = await tableExists(db, 'backfill_games');
+  const pendingJobs = await selectJobs(db, limit, backfillReady ? backfillLimit : 0, backfillReady);
+  const regularCount = pendingJobs.filter((j) => j.backfill_for === null).length;
+  const backfillCount = pendingJobs.length - regularCount;
 
-  console.log(`Found ${pendingJobs.length} pending job(s) (limit ${limit}).\n`);
+  console.log(
+    `Found ${pendingJobs.length} pending job(s) (limit ${limit}): ${regularCount} new, ` +
+      (backfillReady
+        ? `${backfillCount} from player backfills (up to ${backfillLimit} a run; ${await backfillWaiting(db)} waiting in all).\n`
+        : 'no backfill table yet (migration 003).\n'),
+  );
 
   if (pendingJobs.length === 0) {
     console.log('Nothing to do.');
@@ -423,7 +528,8 @@ async function main() {
       const entry = JSON.parse(job.game_list_meta) as ApiGameListEntry;
       const players = extractPlayers(entry);
       console.log(
-        `  ${job.game_id} — ${players?.p0Name ?? '?'} vs ${players?.p1Name ?? '?'} (queued ${job.created_at})`,
+        `  ${job.game_id} — ${players?.p0Name ?? '?'} vs ${players?.p1Name ?? '?'} ` +
+          (job.backfill_for !== null ? `(backfill for ${job.backfill_for}, played ${entry.started_at.slice(0, 10)})` : `(queued ${job.created_at})`),
       );
     }
     console.log('\nDry run — no changes made.');
@@ -438,6 +544,10 @@ async function main() {
   let consecutiveTrouble = 0;
   let consecutiveUnavailable = 0;
   let gzTotal = 0;
+  let retrievedBackfill = 0;
+  /** Per backfilled player: unavailable games in a row, and players parked this run. */
+  const wallStreak = new Map<number, number>();
+  const parkedPlayers = new Map<number, number>();
 
   for (const job of pendingJobs) {
     if (consecutiveTrouble >= CONSECUTIVE_TROUBLE_ABORT_LIMIT) {
@@ -455,6 +565,8 @@ async function main() {
       break;
     }
 
+    if (job.backfill_for !== null && parkedPlayers.has(job.backfill_for)) continue;
+
     let entry: ApiGameListEntry;
     try {
       entry = JSON.parse(job.game_list_meta) as ApiGameListEntry;
@@ -469,7 +581,7 @@ async function main() {
     const players = extractPlayers(entry);
     const label = players ? `${players.p0Name} vs ${players.p1Name}` : `game ${job.game_id}`;
 
-    process.stdout.write(`  ${job.game_id} (${label}) → `);
+    process.stdout.write(`  ${job.game_id} (${label}${job.backfill_for !== null ? `, backfill, played ${entry.started_at.slice(0, 10)}` : ''}) → `);
 
     try {
       const result = await retrieveOneGame(db, r2, job.game_id, entry);
@@ -480,6 +592,7 @@ async function main() {
           await db.run("UPDATE pending_jobs SET status = 'retrieved', error = NULL WHERE game_id = ?", [job.game_id]);
           console.log('already retrieved, marked retrieved');
           skipped++;
+          if (job.backfill_for !== null) wallStreak.set(job.backfill_for, 0);
           consecutiveTrouble = 0;
           consecutiveUnavailable = 0;
           break;
@@ -499,6 +612,18 @@ async function main() {
           failed++;
           consecutiveTrouble = 0; // usually game-specific, not systemic…
           if (result.refused) consecutiveUnavailable++; // …unless refusals keep coming
+          if (job.backfill_for !== null && !result.refused) {
+            const streak = (wallStreak.get(job.backfill_for) ?? 0) + 1;
+            wallStreak.set(job.backfill_for, streak);
+            if (streak >= BACKFILL_WALL) {
+              const parked = await parkOlderBackfill(db, job.backfill_for, entry.started_at);
+              parkedPlayers.set(job.backfill_for, parked);
+              console.log(
+                `\n  ${BACKFILL_WALL} backfill games in a row for player ${job.backfill_for} were unavailable; ` +
+                  `parked their ${parked} older backfill game(s) instead of trying each one.`,
+              );
+            }
+          }
           break;
 
         case 'retrieved':
@@ -509,6 +634,10 @@ async function main() {
               `summary ${kb(result.summaryBytes)} → ${kb(result.summaryGzBytes)} gz`,
           );
           retrieved++;
+          if (job.backfill_for !== null) {
+            retrievedBackfill++;
+            wallStreak.set(job.backfill_for, 0);
+          }
           gzTotal += result.summaryGzBytes;
           consecutiveTrouble = 0;
           consecutiveUnavailable = 0;
@@ -530,6 +659,8 @@ async function main() {
   // ── Summary ─────────────────────────────────────────────────────
   console.log('\n--- Summary ---');
   console.log(`  Retrieved:    ${retrieved}${retrieved > 0 ? ` (summaries ${kb(gzTotal)} gz in total)` : ''}`);
+  if (retrievedBackfill > 0) console.log(`    of which backfill: ${retrievedBackfill}`);
+  for (const [player, n] of parkedPlayers) console.log(`  Parked:       ${n} older backfill game(s) for player ${player}`);
   if (skipped > 0) console.log(`  Skipped:      ${skipped} (already retrieved)`);
   if (retryLater > 0) console.log(`  Retry later:  ${retryLater} (rate limit or network)`);
   if (failed > 0) console.log(`  Failed:       ${failed}`);

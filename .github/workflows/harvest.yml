@@ -2,7 +2,8 @@ name: Harvest Games (v2)
 
 # Discovery, retrieval and (once switched on) analysis, in one run, against v2 only.
 #   1. scripts/discover-games.ts — tracked players' new ranked 1v1 games → pending_jobs
-#   2. scripts/retrieve-pending.ts — pending_jobs → R2 (summary + split blobs) + D1 pointer rows
+#   2. scripts/retrieve-pending.ts — pending_jobs → R2 (summary + split blobs) + D1 pointer rows,
+#      new games first, then up to BACKFILL_PER_RUN games from player backfills (Backfill Player)
 #   3. scripts/analyze-investment.ts — new summaries → investment ratios (repo variable INVESTMENT_ANALYSIS=on)
 # Retrieval runs even if discovery had errors, so the existing queue still drains.
 #
@@ -10,8 +11,11 @@ name: Harvest Games (v2)
 # (= 67a5ef0e-8b13-4a05-b9bc-33142524aca0). The frozen v1 workflows keep the
 # CLOUDFLARE_D1_DATABASE_ID secret; the scripts refuse the v1 id anyway.
 #
-# Player source: repo variable HARVEST_PLAYER_SOURCE (file | v2), default file.
-# Swap it in Settings → Secrets and variables → Actions → Variables; no commit.
+# Player source: repo variable HARVEST_PLAYER_SOURCE (file | file+links | v2),
+# default file+links: players.json plus players added by the Backfill Player
+# action. Discovery also mirrors players.json into v2 for the page.
+# Backfill pace: repo variable BACKFILL_PER_RUN, default 20 games a run.
+# Swap either in Settings → Secrets and variables → Actions → Variables; no commit.
 
 on:
   # OFF until the first manual run is green. Then uncomment (every 2 hours,
@@ -61,7 +65,8 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID_V2 }}
-      PLAYER_SOURCE: ${{ vars.HARVEST_PLAYER_SOURCE || 'file' }}
+      PLAYER_SOURCE: ${{ vars.HARVEST_PLAYER_SOURCE || 'file+links' }}
+      BACKFILL_PER_RUN: ${{ vars.BACKFILL_PER_RUN || '20' }}
       # Inputs go through env, never straight into the shell script.
       IN_SINCE_HOURS: ${{ inputs.since_hours }}
       IN_RECENT: ${{ inputs.recent_per_player }}
@@ -104,7 +109,7 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          ARGS=(--limit "${IN_LIMIT:-40}")
+          ARGS=(--limit "${IN_LIMIT:-40}" --backfill-limit "$BACKFILL_PER_RUN")
           if [ "$IN_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
           npx tsx scripts/retrieve-pending.ts "${ARGS[@]}"
 
