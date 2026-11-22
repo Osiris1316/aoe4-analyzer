@@ -22,6 +22,7 @@
  *   npx tsx scripts/discover-games.ts --since-hours 12         # wider window (max 48), e.g. after an outage
  *   npx tsx scripts/discover-games.ts --recent-per-player 10   # seed: each player's last 10 ranked 1v1 games
  *   npx tsx scripts/discover-games.ts --groups me,league        # only these groups (combine with any mode)
+ *   npx tsx scripts/discover-games.ts --source file+links      # players.json plus players added by link (the workflow default)
  *   npx tsx scripts/discover-games.ts --source v2              # read tracked players from the v2 watchlist
  *   npx tsx scripts/discover-games.ts --players-file path.json # a different players file
  *
@@ -30,7 +31,12 @@
  *     — required for a real run and for --source v2; optional for --dry-run
  *       (without them the dry run can't tell which games are already known)
  *       and not used by --check with the file source.
- *   PLAYER_SOURCE — file (default) | v2
+ *   PLAYER_SOURCE — file (default) | file+links | v2
+ *
+ * With the file sources, a real run first mirrors players.json into v2
+ * tracked_players (migration 003), paused players included, so the page
+ * knows everyone's group. It writes only rows that changed, and then brings
+ * the group and person on those players' analysed rows in line.
  */
 
 import { createD1HttpPipelineDb } from '../packages/core/src/db/d1-http';
@@ -46,15 +52,26 @@ import {
   createPlayerSource,
   isPlayerSourceKind,
   PLAYER_SOURCE_KINDS,
+  readPlayersFileEntries,
   type TrackedPlayer,
 } from '../packages/core/src/harvest/player-source';
+import {
+  chunk,
+  findKnownGameIds,
+  playersInGame,
+  queueGames,
+  RANKED_1V1,
+  skipReason,
+  type SkipReason,
+} from '../packages/core/src/harvest/game-queue';
+import { mirrorFilePlayers, syncResultGroups } from '../packages/core/src/harvest/tracked-players';
 import { argValue, intArg, missingD1Vars, readD1Env, refuseV1 } from '../packages/core/src/harvest/env';
 import type { ApiGameListEntry } from '../packages/core/src/types/api-responses';
 
 // ── Constants ──────────────────────────────────────────────────────────
 
 /** Game kind for the global games endpoint (it takes kinds, not rm_solo). */
-const LEADERBOARD = 'rm_1v1';
+const LEADERBOARD = RANKED_1V1;
 
 /** aoe4world allows up to 50 profile_ids per /games call. */
 const PROFILE_CHUNK = 50;
@@ -79,73 +96,7 @@ const MAX_SINCE_HOURS = 48;
 /** Seed mode: the player games endpoint's default page is 50. */
 const MAX_RECENT_PER_PLAYER = 50;
 
-/** D1 allows 100 bound parameters per query; stay well under. */
-const D1_ID_CHUNK = 90;
-const D1_INSERT_ROWS = 25; // 3 params per row → 75
-
 const DEFAULT_PLAYERS_FILE = 'harvest/players.json';
-
-// ── Helpers ────────────────────────────────────────────────────────────
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
-  return out;
-}
-
-function playersInGame(entry: ApiGameListEntry): number[] {
-  return (entry.teams ?? []).flat().map((slot) => slot.player.profile_id);
-}
-
-/**
- * Only finished ranked 1v1 games go in the queue. An ongoing game has no
- * summary yet; the next run's overlapping window picks it up once finished.
- */
-type SkipReason = 'ongoing' | 'not 1v1';
-
-function skipReason(entry: ApiGameListEntry): SkipReason | null {
-  if (entry.ongoing) return 'ongoing';
-  const teams = entry.teams ?? [];
-  if (teams.length !== 2 || teams.some((t) => t.length !== 1)) return 'not 1v1';
-  if (entry.kind && entry.kind !== LEADERBOARD) return 'not 1v1';
-  return null;
-}
-
-/** game_ids from `ids` already present in pending_jobs (any status) or games. */
-async function findKnownGameIds(db: PipelineDb, ids: number[]): Promise<Set<number>> {
-  const known = new Set<number>();
-  for (const part of chunk(ids, D1_ID_CHUNK)) {
-    const placeholders = part.map(() => '?').join(',');
-    // Any pending_jobs row blocks re-queueing, including 'failed' — the row
-    // is the tombstone. Re-queue a failed game by resetting its status.
-    const pending = await db.getMany<{ game_id: number }>(
-      `SELECT game_id FROM pending_jobs WHERE game_id IN (${placeholders})`,
-      part,
-    );
-    const games = await db.getMany<{ game_id: number }>(
-      `SELECT game_id FROM games WHERE game_id IN (${placeholders})`,
-      part,
-    );
-    for (const r of pending) known.add(r.game_id);
-    for (const r of games) known.add(r.game_id);
-  }
-  return known;
-}
-
-async function queueGames(db: PipelineDb, entries: ApiGameListEntry[]): Promise<number> {
-  const now = new Date().toISOString();
-  let inserted = 0;
-  for (const part of chunk(entries, D1_INSERT_ROWS)) {
-    const values = part.map(() => "(?, ?, ?, 'pending')").join(', ');
-    const params = part.flatMap((e) => [e.game_id, JSON.stringify(e), now]);
-    const res = await db.run(
-      `INSERT OR IGNORE INTO pending_jobs (game_id, game_list_meta, created_at, status) VALUES ${values}`,
-      params,
-    );
-    inserted += res.changes;
-  }
-  return inserted;
-}
 
 // ── aoe4world collection ────────────────────────────────────────────────
 
@@ -221,6 +172,29 @@ async function collectRecent(players: TrackedPlayer[], perPlayer: number): Promi
   return { entries, calls, errors };
 }
 
+// ── Mirror ──────────────────────────────────────────────────────────────
+
+/** Never fails discovery: the mirror only feeds the page. */
+async function mirrorPlayersFile(db: PipelineDb, playersFile: string): Promise<void> {
+  try {
+    const entries = await readPlayersFileEntries(playersFile);
+    const res = await mirrorFilePlayers(db, entries);
+    if (!res) {
+      console.log('Mirror: v2 has no tracked_players table yet (migration 003), skipped.');
+      return;
+    }
+    const touched = [...res.changed, ...res.removed];
+    const synced = await syncResultGroups(db, touched);
+    console.log(
+      touched.length === 0
+        ? `Mirror: tracked_players already matches ${playersFile} (${entries.length} player(s)).`
+        : `Mirror: ${res.changed.length} player(s) added or changed, ${res.removed.length} removed; ${synced} analysed row(s) relabelled.`,
+    );
+  } catch (err) {
+    console.log(`Mirror of ${playersFile} into tracked_players failed, discovery carries on: ${(err as Error).message}`);
+  }
+}
+
 // ── --check ─────────────────────────────────────────────────────────────
 
 async function runCheck(players: TrackedPlayer[]): Promise<void> {
@@ -294,6 +268,11 @@ async function main() {
     process.exit(1);
   }
   console.log(`Player source: ${source.description} — ${players.length} active player(s).`);
+
+  // ── Mirror players.json into v2 for the page ───────────────────
+  if (db && !dryRun && !check && (sourceKind === 'file' || sourceKind === 'file+links')) {
+    await mirrorPlayersFile(db, playersFile);
+  }
 
   if (groupFilter) {
     const knownGroups = new Set(players.map((p) => p.group));

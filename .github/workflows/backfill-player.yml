@@ -1,0 +1,116 @@
+name: Backfill Player (v2)
+
+# Paste an aoe4world profile link and this queues that player's ranked 1v1
+# games from the last 24 months (or what you set), fetches a first batch of
+# summaries right away, and analyses them. The rest are fetched by the
+# scheduled Harvest Games run, after its new games, BACKFILL_PER_RUN a run
+# (repo variable, default 20), newest first.
+#
+#   1. scripts/backfill-player.ts — list the games, queue the new ones, add the player
+#   2. scripts/retrieve-pending.ts — the first batch of summaries
+#   3. scripts/analyze-investment.ts — investment ratios (repo variable INVESTMENT_ANALYSIS=on)
+#
+# Needs migration 003 in v2 (npx tsx scripts/migrate-v2.ts --apply).
+# Shares the harvest's concurrency group, so it never runs beside a harvest.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'aoe4world profile link (or just the profile number)'
+        required: true
+      months:
+        description: 'How far back, in months (1 to 36)'
+        required: false
+        default: '24'
+      group:
+        description: 'Group for a new player: pro, league, me or other (blank: other, or keep an existing one)'
+        required: false
+        default: ''
+      person:
+        description: 'Who the account belongs to, for alts (blank: the aoe4world name)'
+        required: false
+        default: ''
+      follow:
+        description: 'Keep harvesting their new games'
+        type: boolean
+        required: false
+        default: true
+      first_batch:
+        description: 'Summaries to fetch right away (the rest trickle in with the harvest)'
+        required: false
+        default: '40'
+      dry_run:
+        description: 'Dry run: list and count, write nothing'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: harvest-v2
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID_V2 }}
+      PLAYER_SOURCE: ${{ vars.HARVEST_PLAYER_SOURCE || 'file+links' }}
+      PER_RUN: ${{ vars.BACKFILL_PER_RUN || '20' }}
+      # Inputs go through env, never straight into the shell script.
+      IN_PROFILE: ${{ inputs.profile }}
+      IN_MONTHS: ${{ inputs.months }}
+      IN_GROUP: ${{ inputs.group }}
+      IN_PERSON: ${{ inputs.person }}
+      IN_FOLLOW: ${{ inputs.follow }}
+      IN_FIRST: ${{ inputs.first_batch }}
+      IN_DRY_RUN: ${{ inputs.dry_run }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: List and queue the player's games
+        run: |
+          ARGS=(--profile "$IN_PROFILE" --months "${IN_MONTHS:-24}" --per-run "$PER_RUN" --first-batch "${IN_FIRST:-0}")
+          if [ -n "$IN_GROUP" ]; then ARGS+=(--group "$IN_GROUP"); fi
+          if [ -n "$IN_PERSON" ]; then ARGS+=(--person "$IN_PERSON"); fi
+          if [ "$IN_FOLLOW" = "false" ]; then ARGS+=(--no-follow); fi
+          if [ "$IN_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          npx tsx scripts/backfill-player.ts "${ARGS[@]}"
+
+      - name: Fetch the first batch of summaries
+        if: ${{ success() && !inputs.dry_run && inputs.first_batch != '0' }}
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          N="${IN_FIRST:-40}"
+          npx tsx scripts/retrieve-pending.ts --limit "$N" --backfill-limit "$N"
+
+      - name: Analyze investment ratios
+        if: ${{ !cancelled() && !inputs.dry_run && vars.INVESTMENT_ANALYSIS == 'on' }}
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: npx tsx scripts/analyze-investment.ts --limit 200

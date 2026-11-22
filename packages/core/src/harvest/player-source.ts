@@ -7,20 +7,25 @@
  * source changes nothing downstream.
  *
  * Implementations today:
- *   - 'file' — harvest/players.json in the repo (default). Editable from the
- *              GitHub app, versioned, no schema change.
- *   - 'v2'   — the v2 D1 watchlist (active = 1). Works on the current schema;
- *              is_pro = 1 maps to group 'pro', everything else to 'tracked'.
+ *   - 'file'       — harvest/players.json in the repo (the scripts' default).
+ *                    Editable from the GitHub app, versioned, no schema change.
+ *   - 'file+links' — players.json plus the players added by link through the
+ *                    Backfill Player action (v2 tracked_players, origin 'link',
+ *                    migration 003). The harvest workflows' default. Before the
+ *                    migration, or without D1 credentials, it is just the file.
+ *   - 'v2'         — the v2 D1 watchlist (active = 1). Works on the current schema;
+ *                    is_pro = 1 maps to group 'pro', everything else to 'tracked'.
  *
  * Adding a source later (top-N ladder snapshot, a richer v2 table with
  * person + group columns, a league roster) means one more create* function
  * here and one more case in createPlayerSource. Nothing else changes.
  *
- * Pick the source with PLAYER_SOURCE=file|v2 or --source file|v2.
+ * Pick the source with PLAYER_SOURCE=file|file+links|v2 or --source.
  */
 
 import { readFileSync } from 'node:fs';
 import type { PipelineDb } from '../db/pipeline-db';
+import { loadLinkedPlayers } from './tracked-players';
 
 // ── Contract ────────────────────────────────────────────────────────────
 
@@ -41,7 +46,7 @@ export interface PlayerSource {
   load(): Promise<TrackedPlayer[]>;
 }
 
-export const PLAYER_SOURCE_KINDS = ['file', 'v2'] as const;
+export const PLAYER_SOURCE_KINDS = ['file', 'file+links', 'v2'] as const;
 export type PlayerSourceKind = (typeof PLAYER_SOURCE_KINDS)[number];
 
 export function isPlayerSourceKind(value: string): value is PlayerSourceKind {
@@ -59,6 +64,8 @@ export function createPlayerSource(kind: PlayerSourceKind, deps: PlayerSourceDep
   switch (kind) {
     case 'file':
       return createFilePlayerSource(deps.filePath);
+    case 'file+links':
+      return deps.db ? createFileAndLinksPlayerSource(deps.filePath, deps.db) : createFilePlayerSource(deps.filePath, ' (players added by link need D1 credentials)');
     case 'v2':
       if (!deps.db) {
         throw new Error("Player source 'v2' needs D1 credentials (CLOUDFLARE_* env vars).");
@@ -87,32 +94,56 @@ interface PlayersFile {
   players?: unknown;
 }
 
-export function createFilePlayerSource(filePath: string): PlayerSource {
+export function createFilePlayerSource(filePath: string, descriptionSuffix = ''): PlayerSource {
   return {
-    description: `file ${filePath}`,
+    description: `file ${filePath}${descriptionSuffix}`,
     async load() {
-      let raw: string;
-      try {
-        raw = readFileSync(filePath, 'utf8');
-      } catch (err) {
-        throw new Error(`Cannot read players file ${filePath}: ${(err as Error).message}`);
-      }
-      let parsed: PlayersFile;
-      try {
-        parsed = JSON.parse(raw) as PlayersFile;
-      } catch (err) {
-        throw new Error(
-          `Players file ${filePath} is not valid JSON: ${(err as Error).message}. ` +
-            'A missing comma or a trailing comma is the usual cause.',
-        );
-      }
-      return parsePlayersFile(parsed, filePath);
+      return (await readPlayersFileEntries(filePath)).filter((e) => e.active).map(toTrackedPlayer);
     },
   };
 }
 
-/** Exported for tests. Throws one error listing every problem found. */
+/** One players.json entry, paused ones included. */
+export interface PlayersFileEntry extends TrackedPlayer {
+  active: boolean;
+}
+
+function toTrackedPlayer(e: PlayersFileEntry): TrackedPlayer {
+  const { active: _active, ...player } = e;
+  return player;
+}
+
+/**
+ * Every entry in the players file, paused ones included (active: false).
+ * The harvest mirrors all of them into v2 so paused players keep their
+ * group on the page. Throws one error listing every problem found.
+ */
+export async function readPlayersFileEntries(filePath: string): Promise<PlayersFileEntry[]> {
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, 'utf8');
+  } catch (err) {
+    throw new Error(`Cannot read players file ${filePath}: ${(err as Error).message}`);
+  }
+  let parsed: PlayersFile;
+  try {
+    parsed = JSON.parse(raw) as PlayersFile;
+  } catch (err) {
+    throw new Error(
+      `Players file ${filePath} is not valid JSON: ${(err as Error).message}. ` +
+        'A missing comma or a trailing comma is the usual cause.',
+    );
+  }
+  return parsePlayersFileEntries(parsed, filePath);
+}
+
+/** Active players only. Exported for tests. Throws one error listing every problem found. */
 export function parsePlayersFile(parsed: PlayersFile, label = 'players file'): TrackedPlayer[] {
+  return parsePlayersFileEntries(parsed, label).filter((e) => e.active).map(toTrackedPlayer);
+}
+
+/** All players, paused included. Throws one error listing every problem found. */
+export function parsePlayersFileEntries(parsed: PlayersFile, label = 'players file'): PlayersFileEntry[] {
   const problems: string[] = [];
 
   const groups = Array.isArray(parsed.groups)
@@ -127,7 +158,7 @@ export function parsePlayersFile(parsed: PlayersFile, label = 'players file'): T
   }
   const entries = Array.isArray(parsed.players) ? (parsed.players as unknown[]) : [];
 
-  const out: TrackedPlayer[] = [];
+  const out: PlayersFileEntry[] = [];
   const seen = new Map<number, number>(); // profileId -> entry number
 
   entries.forEach((value, i) => {
@@ -163,9 +194,7 @@ export function parsePlayersFile(parsed: PlayersFile, label = 'players file'): T
     }
     seen.set(profileId, n);
 
-    if (e.active === false) return;
-
-    const player: TrackedPlayer = { profileId, person: e.person.trim(), group: e.group };
+    const player: PlayersFileEntry = { profileId, person: e.person.trim(), group: e.group, active: e.active !== false };
     if (typeof e.note === 'string' && e.note !== '') player.note = e.note;
     out.push(player);
   });
@@ -174,6 +203,32 @@ export function parsePlayersFile(parsed: PlayersFile, label = 'players file'): T
     throw new Error(`${label} has ${problems.length} problem(s):\n  - ${problems.join('\n  - ')}`);
   }
   return out;
+}
+
+// ── File + players added by link ────────────────────────────────────────
+
+/**
+ * players.json, plus the players added by link that are still followed.
+ * The file wins for anyone it names, paused entries included: a player
+ * paused in the file stays paused even if they were also added by link.
+ */
+export function createFileAndLinksPlayerSource(filePath: string, db: PipelineDb): PlayerSource {
+  const source: PlayerSource = {
+    description: `file ${filePath} + players added by link`,
+    async load() {
+      const entries = await readPlayersFileEntries(filePath);
+      const inFile = new Set(entries.map((e) => e.profileId));
+      const linked = await loadLinkedPlayers(db);
+      if (linked.tableMissing) {
+        (source as { description: string }).description = `file ${filePath} (v2 has no tracked_players table yet; apply migration 003)`;
+      }
+      return [
+        ...entries.filter((e) => e.active).map(toTrackedPlayer),
+        ...linked.players.filter((p) => !inFile.has(p.profileId)),
+      ];
+    },
+  };
+  return source;
 }
 
 // ── v2 source ───────────────────────────────────────────────────────────
