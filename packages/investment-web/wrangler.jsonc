@@ -1,15 +1,24 @@
-// aoe4-investment: the investment ratios phone page and its read-only API.
+// aoe4-investment: the investment pages and their read-only API.
 // Its own Worker, bound to v2 only. Deploy from the repo root with:
 //   npx wrangler deploy --config packages/investment-web/wrangler.jsonc
-// Never add this binding to the root wrangler.jsonc (that Worker serves v1).
+// Wrangler builds the page first (the "build" step below), so that one command
+// is still all a deploy needs. Never add this binding to the root
+// wrangler.jsonc (that Worker serves v1).
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "aoe4-investment",
   "main": "src/worker.ts",
   "compatibility_date": "2026-04-20",
+  "build": {
+    "command": "pnpm --filter @aoe4analyzer/investment-web build",
+    "watch_dir": "web/src"
+  },
   "assets": {
-    "directory": "./public",
-    "not_found_handling": "none"
+    "directory": "./dist",
+    // Every page address (/players/123) gets index.html; the router draws the page.
+    "not_found_handling": "single-page-application",
+    // /api/* always reaches the Worker, never the page.
+    "run_worker_first": ["/api/*"]
   },
   "d1_databases": [
     {

@@ -1,25 +1,62 @@
 # aoe4-investment
 
-This is the phone page for the investment ratios, plus its read-only API. It's a Worker of its own, bound only to v2, and the live API Worker on v1 is never touched. It's public and ungated, and it only reads data. Every player name it shows is already public on aoe4world.
+The investment pages and their read-only API. It's a Worker of its own, bound only to v2, and the live API Worker on v1 is never touched. It's public and ungated, and it only reads data. Every player name it shows is already public on aoe4world.
 
-The page (`public/`) is plain HTML, CSS and JS, served as static assets. Results load from `/api/meta`, `/api/rows` and `/api/game` (`src/worker.ts`), and the player views from `/api/players` and `/api/player` (`src/players.ts`).
+The pages are a React app (React 19, React Router 7, Vite), built the same way as the matchup library and the analyzer's web package. The Worker (`src/`) answers `/api/*`; everything else is the built app, served as static assets in single-page mode, so any page address opens the app and the router draws the page.
 
 ## Pages
 
-**Games** is the list of player-games, one card per player per age, with the opponent's same age beside it. On wide screens the picked game fills a board on the right. Names on the board, and the profile buttons under an opened card, lead to that player's profile.
+| Address | Page |
+|---|---|
+| `/` | **Games**: every analysed player-game, one card per player per age with the opponent's same age beside it. On wide screens the picked game fills a board on the right. With a pinned player it opens on their games, with a switch to everyone. |
+| `/players` | **Players**: the tracked people as one row each, after aoe4world's rankings. Civs as flags, games, win-loss, share won, and per age the median military and the usual time they reached the next age, then last game and backfill progress. Every comparable column sorts; the order stays in the address. The search narrows the table and also finds anyone else in the analysed games. |
+| `/players/:id` | **A player's overview**: how they invest in each age (the spread on the cards' scale, split into units, production and defense), when and how they reach the next age (with the landmarks or wings they use), the same by civ, and their record against each civ and on each map. Any of a person's accounts opens it; alts are combined. |
+| `/players/:id/games` | **A player's games**: the same cards, filters, age path and board as Games, only theirs. |
 
-**Players** lists the tracked people: everyone in `harvest/players.json` plus anyone added with the Backfill Player action. Each card shows their record, their median military in each age with the usual time they reached the next one, their main civs, and how far a running backfill has got. A search finds anyone else in the analysed games, opponents included.
+The game list's filters live in the address (`?window=feudal&civ=french&r_dark=combined:0:0.5`), so a link opens with them set and the back button walks real pages. Old `#view=...` links and bookmarks turn into these addresses on load.
 
-**A profile** (`#view=player&p=<profile id>`) combines a person's accounts. It shows how they invest in each age (the median, the middle half and the spread on the same scale as the cards, split into units, production and defense), when they usually reach the next age, the same by civ, and their record against each civ and on each map. Their games follow, with the same cards, filters, age path and board as Games.
+**Pinning** works like following in the league manager: pin one player and this browser remembers them (localStorage only; nothing is stored on the server).
 
-**Pinning** works like following in the league manager. Pin one player, from their profile or the player list, and this browser remembers them: the chip in the head leads to their profile, and Games opens on their games with a switch to everyone. Elsewhere a small pin marks them. The pin lives in the browser only (localStorage); nothing is stored on the server. The filters are age window, group, civ, opponent civ, player name and "aged up only". You can sort by combined, units, production, defense or walls ratio, by age-up time, or by date. Tap a row to see what was counted, the divisor, and a link to the game on aoe4world. The current filters stay in the address bar, so a link to the page opens with them already set.
+**The age path** works like an opening tree. In any age you can narrow the list to a range of one ratio, by tapping histogram bars or typing the bounds. Later ages then show only the player-games whose earlier rows fall inside every range on the path.
 
-The age path works like an opening tree. In any age you can narrow the list to a range of one ratio, either by tapping bars in the histogram or by typing the bounds. The later ages then show only the player-games whose earlier rows fall inside every range on the path. A range set on a later age never narrows an earlier one. The histogram always shows the whole spread for the current path, and the chosen range is highlighted on it.
+**Icons**: civ flags come from the league manager. Unit, building, technology and landmark icons, and the names shown beside them, come from the [AoE4 World data repo](https://github.com/aoe4world/data) at the commit the metric is pinned to. `scripts/icons.ts` copies the icon of everything the metric can count and of every age-up into `web/public/icons` and writes `web/src/icons.generated.ts`. Run it again from the repo root after `refresh-game-data` moves the commit or `categories.json` gains ids:
 
-Deploy from the repo root:
+```
+npx tsx packages/investment-web/scripts/icons.ts
+```
+
+Age of Empires IV © Microsoft Corporation. These pages were made under Microsoft's Game Content Usage Rules using assets from Age of Empires IV, and they are not endorsed by or affiliated with Microsoft.
+
+## Layout
+
+```
+src/                    the Worker: worker.ts (meta, rows, game) and players.ts (players, player)
+web/                    the app (Vite root)
+  index.html
+  public/               _headers (CSP and caching), fonts, flags, icons
+  src/
+    main.tsx            start: old hash links, then the router
+    app/                router, layout (bar and foot), paths (every address), meta
+    api/                fetch with a short cache; response types
+    lib/                formatting, civs and items, pinning, media queries
+    kit/                shared pieces: Ratio, Flag, ItemIcon, Bar, Strip, Pin, SortTh
+    features/games/     the game list: state in the address, filters, age path, cards, board
+    pages/              games, players, player (layout, overview, games)
+    styles/             tokens and base; components keep their own CSS modules
+scripts/icons.ts        copies icons and names from the aoe4world data repo
+dist/                   the build (not committed)
+```
+
+## Deploy
+
+From the repo root:
 
 ```
 npx wrangler deploy --config packages/investment-web/wrangler.jsonc
 ```
 
-It's then live at `https://aoe4-investment.<your subdomain>.workers.dev`.
+Wrangler builds the app first (`pnpm --filter @aoe4analyzer/investment-web build`: a type check, then Vite), so this one command is still the whole deploy. After pulling changes to this package, run `pnpm install` once.
+
+## Local development
+
+Two terminals from the repo root: `npx wrangler dev --config packages/investment-web/wrangler.jsonc --remote` (the API on 8787, reading the real v2; without `--remote` it reads an empty local copy), then `pnpm --filter @aoe4analyzer/investment-web dev` (the app on 5173, sending `/api` to 8787). The API only ever reads.

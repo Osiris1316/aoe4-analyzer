@@ -1,0 +1,45 @@
+/* Resets and the few classes every page shares. Everything else lives in a
+   component's own CSS module. */
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); }
+body {
+  color: var(--fg); font-family: var(--font); font-size: var(--text-md); line-height: 1.5;
+  font-variant-numeric: tabular-nums; -webkit-text-size-adjust: 100%;
+}
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+img { display: block; }
+
+/* Numbers */
+.mono { font-family: var(--mono); }
+/* The quieter "x" after a ratio */
+.x { font-weight: 400; color: var(--faint); }
+
+/* The two players */
+.c-p1 { color: var(--p1); }
+.c-p2 { color: var(--p2); }
+
+/* A label pill: groups, paused, not tracked */
+.tag {
+  display: inline-block; flex: 0 0 auto; padding: 0 6px; border: 1px solid var(--line); border-radius: 999px; line-height: 16px; white-space: nowrap;
+  font-size: var(--text-2xs); font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); vertical-align: 1px;
+}
+.tag.quiet { border-style: dashed; }
+
+/* Small caps section labels */
+.label {
+  font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint);
+}
+
+.visually-hidden {
+  position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* The page frame: one width and one pair of edges for every page */
+.frame { max-width: var(--page-max); margin: 0 auto; padding-left: var(--gutter); padding-right: var(--gutter); }
+
+.empty { margin: 32px 0; color: var(--muted); }

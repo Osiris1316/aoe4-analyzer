@@ -1,0 +1,20 @@
+.bar { position: relative; display: flex; height: 10px; border-radius: 2px; overflow: hidden; background: var(--track); }
+.seg { flex: 0 0 auto; height: 100%; }
+.p1 .seg { background: var(--p1); }
+.p2 .seg { background: var(--p2); }
+.u { opacity: 1; }
+.p { opacity: 0.62; }
+.d { opacity: 0.36; }
+/* A notch at each whole age-up, over the bar and the track alike */
+.bar::after, .strip::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 2;
+  background-image: linear-gradient(to left, var(--notch) 1px, transparent 1px);
+  background-size: calc(100% / var(--scale, 1)) 100%;
+}
+.over { position: absolute; right: 0; top: 0; bottom: 0; width: 3px; background: var(--fg); z-index: 1; }
+
+.strip { position: relative; display: block; height: 10px; margin: 8px 0 2px; border-radius: 2px; overflow: hidden; background: var(--track); }
+.out, .mid { position: absolute; top: 0; bottom: 0; background: var(--p1); }
+.out { opacity: 0.28; }
+.mid { opacity: 0.75; }
+.med { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--fg); z-index: 1; }

@@ -1,0 +1,15 @@
+.flag { flex: 0 0 auto; display: inline-block; width: 21px; height: 12px; border-radius: 2px; object-fit: cover; vertical-align: -1px; box-shadow: 0 0 0 1px var(--line-soft); }
+.flagMd { width: 26px; height: 15px; vertical-align: -2px; }
+.flagMissing { font-size: var(--text-xs); color: var(--muted); }
+
+.civ { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; vertical-align: bottom; }
+.civName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tile {
+  flex: 0 0 auto; display: inline-block; overflow: hidden; border-radius: 4px;
+  background: var(--tile); box-shadow: inset 0 0 0 1px var(--tile-line); vertical-align: middle;
+}
+.tile img { width: 100%; height: 100%; object-fit: contain; }
+
+.item { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; vertical-align: middle; }
+.itemName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

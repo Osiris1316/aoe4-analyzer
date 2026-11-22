@@ -1,0 +1,27 @@
+.path { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 20px; font-size: var(--text-sm); color: var(--faint); }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px;
+  border: 1px solid var(--fg-2); border-radius: 999px; background: var(--surface); color: var(--fg); font-size: var(--text-sm);
+}
+.chip b { font-weight: 600; }
+.x { all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: 50%; text-align: center; line-height: 22px; color: var(--muted); }
+
+.range { margin-top: 20px; padding: 14px 14px 12px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); }
+.head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--text-sm); color: var(--muted); }
+.head select { height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raised); color: var(--fg); font-size: var(--text-sm); }
+.hist { display: flex; align-items: flex-end; gap: 2px; height: 56px; margin-top: 12px; }
+.hist button { all: unset; flex: 1; height: 100%; display: flex; align-items: flex-end; cursor: pointer; }
+.hist button span { display: block; width: 100%; min-height: 1px; background: var(--line); border-radius: 2px 2px 0 0; }
+.hist button.on span { background: var(--fg-2); }
+.hist button:focus-visible span { outline: 2px solid var(--focus); }
+.axis { position: relative; height: 16px; margin-top: 4px; font-family: var(--mono); font-size: var(--text-2xs); color: var(--faint); }
+.axis span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.axis span:first-child { transform: none; }
+.inputs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; font-size: var(--text-sm); color: var(--muted); }
+.inputs input {
+  width: 4.6em; height: 30px; padding: 0 6px; margin: 0 2px 0 4px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--raised); color: var(--fg); font-family: var(--mono); font-size: var(--text-sm); text-align: right;
+}
+.inputs button { height: 30px; padding: 0 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: transparent; color: var(--fg-2); font-size: var(--text-sm); }
+.inputs .apply { background: var(--primary-bg); border-color: var(--primary-bg); color: var(--primary-fg); }
+.msg { margin: 8px 0 0; font-size: var(--text-sm); color: var(--warn); }

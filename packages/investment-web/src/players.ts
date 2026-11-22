@@ -7,7 +7,8 @@
  *   GET /api/players?q=<name>           anyone in the analysed games whose name matches (opponents too)
  *   GET /api/player?id=<profile>&version=
  *                                       one person: their accounts, results, civs, matchups, and per age
- *                                       the spread of their ratios and age-up times, overall and by civ
+ *                                       the spread of their ratios and age-up times, overall and by civ,
+ *                                       with the landmarks (or wings) each civ aged up with
  *   playerFilter()                      the `player=` filter /api/rows uses for a profile's game list
  *
  * A person can have several accounts (alts share `person` in tracked_players).
@@ -323,6 +324,7 @@ interface Row {
   started_at: string | null;
   window_end_sec: number;
   reached_next_age: number;
+  next_age_cost_source: string | null;
   ratio_units: number;
   ratio_production: number;
   ratio_defense: number;
@@ -342,7 +344,23 @@ function windowStats(rows: Row[]) {
     reached: reached.length,
     /** Next age-up time, for those who got there. */
     ageUp: spread(reached.map((r) => r.window_end_sec)),
+    ageUps: ageUpChoices(rows),
   };
+}
+
+/**
+ * How they reached the next age: each landmark or technology they bought for it
+ * ("landmark:<id>" / "technology:<id>", from next_age_cost_source), most used
+ * first. Ages they didn't leave, and age-ups the analysis couldn't name, are left out.
+ */
+function ageUpChoices(rows: Row[]): { source: string; n: number }[] {
+  const m = new Map<string, number>();
+  for (const r of rows) {
+    const src = r.next_age_cost_source ?? '';
+    if (r.reached_next_age !== 1 || !src.includes(':')) continue;
+    m.set(src, (m.get(src) ?? 0) + 1);
+  }
+  return [...m.entries()].map(([source, n]) => ({ source, n })).sort((a, b) => b.n - a.n || a.source.localeCompare(b.source));
 }
 
 /** The bar scale of each age window, from the Worker (the same scale the cards use). */
@@ -368,7 +386,7 @@ export async function player(db: PlayersDb, url: URL, json: Json, scalesFor?: Sc
   const rows: Row[] = version
     ? (await db.prepare(
       `SELECT game_id, profile_id, age_window, player_name, civ, opponent_civ, result, map, started_at, window_end_sec, reached_next_age,
-              ratio_units, ratio_production, ratio_defense, ratio_combined, ratio_walls
+              next_age_cost_source, ratio_units, ratio_production, ratio_defense, ratio_combined, ratio_walls
        FROM investment_results WHERE metric_version = ? AND profile_id IN (${marks(ids.length)})`,
     ).bind(version, ...ids).all<Row>()).results
     : [];
@@ -401,7 +419,7 @@ export async function player(db: PlayersDb, url: URL, json: Json, scalesFor?: Sc
         windows: Object.fromEntries(WINDOWS.map((w) => {
           const ws = mine.filter((r) => r.age_window === w);
           const reached = ws.filter((r) => r.reached_next_age === 1).map((r) => r.window_end_sec);
-          return [w, { n: ws.length, combined: medianOf(ws.map((r) => r.ratio_combined)), ageUp: medianOf(reached), reached: reached.length }];
+          return [w, { n: ws.length, combined: medianOf(ws.map((r) => r.ratio_combined)), ageUp: medianOf(reached), reached: reached.length, ageUps: ageUpChoices(ws) }];
         })),
       };
     })

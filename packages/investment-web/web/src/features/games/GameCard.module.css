@@ -1,0 +1,79 @@
+/* A game card: the result as its left edge, a context line, and two player
+   rows on the same columns as every other card, so numbers line up down the list. */
+.card { background: var(--surface); border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--radius-card); }
+.card.win { border-left-color: color-mix(in srgb, var(--ok) 60%, transparent); }
+.card.loss { border-left-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+.picked { background: var(--raised); box-shadow: 0 0 0 1px var(--fg-2); }
+.face { all: unset; display: block; width: 100%; box-sizing: border-box; padding: 12px 14px 13px 13px; cursor: pointer; border-radius: var(--radius-card); }
+.face:hover { background: var(--hover); }
+.picked .face:hover { background: transparent; }
+.face:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* Context line: result, the matchup with flags, the map; group and date at the end */
+.ctx { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 10px; font-size: var(--text-sm); color: var(--muted); }
+.res { font-family: var(--mono); font-weight: 600; width: 1ch; flex: 0 0 auto; }
+.res.win { color: var(--ok); } .res.loss { color: var(--danger); }
+.what { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; color: var(--fg-2); font-weight: 500; }
+.what > span { flex: 0 0 auto; }
+.vsWord, .map { color: var(--muted); font-weight: 400; }
+.what > .map { overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.date { flex: 0 0 auto; font-family: var(--mono); font-size: var(--text-xs); color: var(--faint); }
+
+/* The two player rows: ratio | name | bar | age-up time */
+.duel { display: grid; row-gap: 7px; }
+.prow { display: grid; grid-template-columns: var(--col-ratio) var(--col-name) minmax(0, 1fr) var(--col-time); column-gap: 10px; align-items: center; min-height: 20px; }
+.ratio { font-family: var(--mono); font-size: var(--text-md); font-weight: 600; text-align: right; white-space: nowrap; color: var(--fg); }
+.p2 .ratio { color: var(--fg-2); }
+.pname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-md); }
+.p1 .pname { color: var(--p1); font-weight: 600; }
+.p2 .pname { color: var(--p2); font-weight: 500; }
+.time { font-family: var(--mono); font-size: var(--text-sm); color: var(--muted); text-align: right; white-space: nowrap; }
+.none .ratio, .none .time { color: var(--faint); font-weight: 400; }
+.missing { font-size: var(--text-xs); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pinned { white-space: nowrap; }
+.pinMark { width: 11px !important; height: 11px !important; margin-right: 4px; vertical-align: -1px; color: var(--fg-2); }
+
+/* Opened on a phone: both players side by side */
+.detail { border-top: 1px solid var(--line-soft); padding: 6px 14px 16px 13px; }
+.vs { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--text-sm); }
+.vs col.num { width: var(--col-num); }
+.vs th, .vs td { padding: 3px 0; vertical-align: middle; }
+.vs th { text-align: left; font-weight: 400; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 8px; }
+.vs td { text-align: right; font-family: var(--mono); color: var(--fg-2); white-space: nowrap; }
+.vs td.zero, .zeroText { color: var(--faint); }
+
+.vs thead th { padding-top: 10px; }
+.who th:not(:first-child) { text-align: right; padding-right: 0; padding-left: 6px; font-weight: 600; }
+.civRow td { font-family: var(--font); font-size: var(--text-xs); color: var(--faint); overflow: hidden; text-overflow: ellipsis; padding-left: 6px; }
+
+.facts th { color: var(--faint); font-size: var(--text-xs); }
+.facts td { font-size: var(--text-xs); color: var(--muted); }
+.facts tr:first-child th, .facts tr:first-child td { padding-top: 8px; }
+.ageUpCell { display: inline-flex; justify-content: flex-end; }
+
+.cat th, .cat td { padding-top: 14px; }
+.cat th { font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.cat td { font-weight: 600; color: var(--fg); }
+.note { font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--faint); margin-left: 6px; }
+.item th { color: var(--fg-2); padding-top: 2px; padding-bottom: 2px; }
+.nothing th { color: var(--faint); font-style: italic; }
+
+.total th, .total td { border-top: 1px solid var(--line); padding-top: 9px; }
+.total th, .total td { color: var(--fg); font-weight: 600; }
+.spent th, .spent td { font-size: var(--text-xs); color: var(--faint); padding-top: 0; }
+
+.notes { margin: 16px 0 0; font-size: var(--text-sm); color: var(--muted); }
+.notes p { margin: 0 0 4px; }
+.out {
+  display: block; margin-top: 14px; padding: 9px 12px; text-align: center;
+  border: 1px solid var(--line); border-radius: var(--radius-md); color: var(--fg-2); text-decoration: none; font-size: var(--text-sm);
+}
+.out:hover { border-color: var(--faint); color: var(--fg); }
+.plinks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.plinks a {
+  padding: 8px 10px; text-align: center; border: 1px solid var(--line-soft); border-radius: var(--radius-md);
+  color: var(--muted); text-decoration: none; font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.plinks a:hover { border-color: var(--faint); color: var(--fg); }
+.nm { font-weight: 600; }
+.plinks .p1 .nm { color: var(--p1); } .plinks .p2 .nm { color: var(--p2); }

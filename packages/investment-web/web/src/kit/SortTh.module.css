@@ -1,0 +1,12 @@
+.th { padding: 0; }
+.btn {
+  all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 3px; width: 100%; cursor: pointer;
+  font: inherit; color: inherit; white-space: nowrap;
+}
+.right .btn { justify-content: flex-end; }
+.left .btn { justify-content: flex-start; }
+.btn:hover { color: var(--fg-2); }
+.btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+.on { color: var(--fg); }
+/* The arrow sits outside the number column's edge, so heads line up with their numbers */
+.arrow { display: inline-block; width: 9px; font-size: 7px; line-height: 1; text-align: center; }
