@@ -19,6 +19,8 @@ export interface ListState {
   vs: string;
   q: string;
   reached: boolean;
+  /** Only games where either player has a Twitch VOD. */
+  vod: boolean;
   sort: string;
   dir: 'asc' | 'desc';
   /** The ratio the histogram shows when this age has no range. */
@@ -30,7 +32,7 @@ export interface ListState {
 }
 
 const DEFAULTS: Omit<ListState, 'ranges'> = {
-  window: 'dark', group: 'all', civ: '', vs: '', q: '', reached: false, sort: 'combined', dir: 'desc', hm: 'combined', g: '', version: '',
+  window: 'dark', group: 'all', civ: '', vs: '', q: '', reached: false, vod: false, sort: 'combined', dir: 'desc', hm: 'combined', g: '', version: '',
 };
 
 export function readList(sp: URLSearchParams): ListState {
@@ -51,6 +53,7 @@ export function readList(sp: URLSearchParams): ListState {
     vs: sp.get('vs') || '',
     q: sp.get('q') || '',
     reached: sp.get('reached') === '1',
+    vod: sp.get('vod') === '1',
     sort: (SORTS as readonly string[]).includes(sort) ? sort : 'combined',
     dir: sp.get('dir') === 'asc' ? 'asc' : 'desc',
     hm: isMetric(sp.get('hm')) ? (sp.get('hm') as Metric) : 'combined',
@@ -67,7 +70,7 @@ export function writeList(s: ListState): URLSearchParams {
   const p = new URLSearchParams();
   (Object.keys(DEFAULTS) as (keyof typeof DEFAULTS)[]).forEach((k) => {
     const v = s[k];
-    if (k === 'reached') { if (v) p.set(k, '1'); return; }
+    if (k === 'reached' || k === 'vod') { if (v) p.set(k, '1'); return; }
     if (v !== DEFAULTS[k] && v !== '') p.set(k, String(v));
   });
   for (const w of WINDOWS) { const r = s.ranges[w]; if (r) p.set('r_' + w, rangeParam(r)); }
@@ -83,6 +86,7 @@ export function rowsQuery(s: ListState, players: number[] | null): string {
   if (s.vs) p.set('vs', s.vs);
   if (s.q && !players) p.set('q', s.q);
   if (s.reached) p.set('reached', '1');
+  if (s.vod) p.set('vod', '1');
   p.set('hm', s.hm);
   for (const w of WINDOWS) { const r = s.ranges[w]; if (r) p.set('range_' + w, rangeParam(r)); }
   return '/api/rows?' + p.toString();

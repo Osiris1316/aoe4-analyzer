@@ -1,5 +1,5 @@
 // Around every page: the bar with the pages and the pinned player, and the foot.
-import { Link, NavLink, Outlet, ScrollRestoration, useRouteError } from 'react-router';
+import { Link, NavLink, Outlet, ScrollRestoration, useLocation, useRouteError } from 'react-router';
 import { usePin } from '../lib/pin';
 import { initials } from '../lib/format';
 import { PinIcon } from '../kit/Pin';
@@ -25,12 +25,15 @@ function PinChip() {
 }
 
 function AppBar() {
+  // A game's own page counts as part of Games.
+  const { pathname } = useLocation();
+  const onGames = pathname === '/' || pathname.startsWith('/games/');
   return (
     <header className={s.bar}>
       <div className={'frame ' + s.barInner}>
         <Link to={paths.games()} className={s.brand}>Military investment</Link>
         <nav className={s.nav} aria-label="Pages">
-          <NavLink to={paths.games()} end className={({ isActive }) => (isActive ? s.on : undefined)}>Games</NavLink>
+          <NavLink to={paths.games()} end className={onGames ? s.on : undefined} aria-current={onGames ? 'page' : undefined}>Games</NavLink>
           <NavLink to={paths.players()} className={({ isActive }) => (isActive ? s.on : undefined)}>Players</NavLink>
         </nav>
         <PinChip />

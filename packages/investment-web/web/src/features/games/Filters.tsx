@@ -1,8 +1,8 @@
 // The age tabs and the filters above the cards.
 import { useEffect, useState } from 'react';
 import { useMeta } from '../../app/meta';
-import { NEXT, WINDOWS, AGE_SHORT, civName } from '../../lib/game';
-import { Flag } from '../../kit/marks';
+import { NEXT, WINDOWS, AGE_SHORT } from '../../lib/game';
+import { CivPicker } from '../../kit/CivPicker';
 import type { ListState } from './listState';
 import s from './Filters.module.css';
 
@@ -15,23 +15,6 @@ export function AgeTabs({ state, update }: { state: ListState; update: (p: Parti
         </button>
       ))}
     </nav>
-  );
-}
-
-/** A civ picker with the chosen civ's flag inside it. */
-function CivSelect({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  const { meta } = useMeta();
-  return (
-    <label>{label}
-      <span className={s.civPick + (value ? ' ' + s.hasFlag : '')}>
-        {value && <span className={s.civFlag}><Flag civ={value} /></span>}
-        <select value={value} onChange={(e) => onChange(e.target.value)}>
-          <option value="">Any</option>
-          {meta.civs.map((c) => <option key={c} value={c}>{civName(c)}</option>)}
-          {value && !meta.civs.includes(value) && <option value={value}>{civName(value)}</option>}
-        </select>
-      </span>
-    </label>
   );
 }
 
@@ -51,28 +34,37 @@ export function Filters({ state, update, onePlayer }: { state: ListState; update
   return (
     <section className={s.filters} aria-label="Filters">
       {!onePlayer && (
-        <label>Who
+        <label className={s.grow}>Who
           <select value={state.group} onChange={(e) => update({ group: e.target.value })}>
             <option value="all">Everyone</option><option value="tracked">Tracked players</option><option value="untracked">Opponents only</option>
             {meta.groups.map((g) => <option key={g} value={g}>{g.charAt(0).toUpperCase() + g.slice(1)}</option>)}
           </select>
         </label>
       )}
-      <CivSelect label="Civ" value={state.civ} onChange={(v) => update({ civ: v })} />
-      <CivSelect label="Versus" value={state.vs} onChange={(v) => update({ vs: v })} />
-      <label>Sort
+      <div className={s.field}>
+        <span className={s.lab}>Civ</span>
+        <CivPicker label="Civ" value={state.civ} civs={meta.civs} onChange={(v) => update({ civ: v })} compact />
+      </div>
+      <div className={s.field}>
+        <span className={s.lab}>Versus</span>
+        <CivPicker label="Versus" value={state.vs} civs={meta.civs} onChange={(v) => update({ vs: v })} compact />
+      </div>
+      <label className={s.grow}>Sort
         <select value={state.sort} onChange={(e) => update({ sort: e.target.value, dir: 'desc' })}>
           <option value="combined">Combined</option><option value="units">Units</option><option value="production">Production</option>
           <option value="defense">Defense</option><option value="walls">Walls</option><option value="ageup">Age-up time</option><option value="date">Date played</option>
         </select>
       </label>
+      <button type="button" className={s.dir} aria-label={'Sort direction: ' + dirText} onClick={() => update({ dir: state.dir === 'desc' ? 'asc' : 'desc' })}>{dirText}</button>
       {!onePlayer && (
-        <label className={s.wide}>Player
+        <label className={s.full}>Player
           <input type="search" placeholder="Name" autoComplete="off" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
       )}
-      <button type="button" className={s.dir} aria-label={'Sort direction: ' + dirText} onClick={() => update({ dir: state.dir === 'desc' ? 'asc' : 'desc' })}>{dirText}</button>
-      <label className={s.check}><input type="checkbox" checked={state.reached} onChange={(e) => update({ reached: e.target.checked })} /> Aged up only</label>
+      <div className={s.checks}>
+        <label className={s.check}><input type="checkbox" checked={state.reached} onChange={(e) => update({ reached: e.target.checked })} /> Aged up only</label>
+        <label className={s.check}><input type="checkbox" checked={state.vod} onChange={(e) => update({ vod: e.target.checked })} /> With a Twitch VOD</label>
+      </div>
     </section>
   );
 }

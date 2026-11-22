@@ -1,32 +1,36 @@
-// Wide screens: the picked game whole, laid out like the matchup library's
-// Versus page. Their lane on top, yours along the bottom, where they meet in
-// between, an age per column.
-import type { ReactNode } from 'react';
+// One game whole, laid out like the matchup library's Versus page: their lane
+// on top, yours along the bottom, where they meet in between, an age per
+// column. The side panel on wide screens and the game's own page both use it;
+// on the page, narrow screens get the three ages in a sideways scroller.
+import { forwardRef, useEffect, useRef, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { useJson, withVersion } from '../../api/client';
 import type { GameResponse, Row } from '../../api/types';
-import { AGE, AGE_SHORT, BUCKETS, NEXT, WINDOWS, ageUp, item, type Win } from '../../lib/game';
+import { AGE, AGE_SHORT, BUCKETS, FLAG_TEXT, NEXT, WINDOWS, ageUp, item, type Win } from '../../lib/game';
 import { day, fx, mmss, res } from '../../lib/format';
 import type { Pin } from '../../lib/pin';
+import { vodAt, vodUrl } from '../../lib/vod';
 import { Bar } from '../../kit/Bar';
 import { Civ, ItemIcon, Ratio } from '../../kit/marks';
+import { VodIcon } from '../../kit/VodIcon';
 import { aoe4worldGame, paths } from '../../app/paths';
 import { PlayerName } from './GameCard';
 import { counts, side } from './rows';
 import s from './Board.module.css';
 
-interface Player {
+export interface Player {
   id: number | null; name: string; civ: string | null; group: string | null; result: string | null;
-  w: Partial<Record<Win, Row>>; any: Row | null;
+  w: Partial<Record<Win, Row>>; any: Row | null; vod: string | null;
 }
+export interface Sides { me: Player; them: Player; any: Row }
 
-function playersOf(rows: Row[], profileId: number): { me: Player; them: Player } | null {
+export function playersOf(rows: Row[], profileId: number, vods: Record<string, string> = {}): Sides | null {
   const by = new Map<number, Player>();
   let opp: { id: number | null; name: string | null; civ: string | null } | null = null;
   for (const r of rows) {
     let p = by.get(r.profile_id);
     if (!p) {
-      p = { id: r.profile_id, name: r.person || r.player_name || '?', civ: r.civ, group: r.player_group, result: r.result, w: {}, any: r };
+      p = { id: r.profile_id, name: r.person || r.player_name || '?', civ: r.civ, group: r.player_group, result: r.result, w: {}, any: r, vod: vodUrl(vods[String(r.profile_id)]) };
       by.set(r.profile_id, p);
     }
     p.w[r.age_window] = r;
@@ -37,21 +41,50 @@ function playersOf(rows: Row[], profileId: number): { me: Player; them: Player }
   const them = (opp.id && by.get(opp.id)) || {
     id: opp.id, name: opp.name || '?', civ: opp.civ, group: null, any: null, w: {},
     result: me.result === 'win' ? 'loss' : me.result === 'loss' ? 'win' : null,
+    vod: opp.id ? vodUrl(vods[String(opp.id)]) : null,
   };
-  return { me, them };
+  return { me, them, any: me.any as Row };
 }
 
-export function Board({ gameId, profileId, window, version, pin, only }: {
-  gameId: number; profileId: number; window: Win; version: string; pin: Pin | null; only: number[] | null;
-}) {
-  const { data, error } = useJson<GameResponse>(withVersion('/api/game?id=' + gameId, version));
-  if (error) return <p className={s.empty}>Could not load the game ({error.message}).</p>;
-  if (!data || data.game_id !== gameId) return <p className={s.empty}>Loading the game…</p>;
-  const P = playersOf(data.rows, profileId);
-  if (!P) return <p className={s.empty}>This game has no rows for that player.</p>;
-  const any = P.me.any as Row;
-  const scales = data.scales || {};
+/** Who played whom, the game, and actions on the right. */
+export function GameHead({ P, actions, level = 2 }: { P: Sides; actions?: ReactNode; level?: 1 | 2 }) {
+  const H = level === 1 ? 'h1' : 'h2';
+  const { me, them, any } = P;
+  return (
+    <div className={s.head}>
+      <div className={s.headMain}>
+        <H className={s.title}><span className="c-p1">{me.name}</span><span className={s.vs}>vs</span><span className="c-p2">{them.name}</span></H>
+        <p className={s.headSub}>
+          <Civ civ={me.civ} />{' '}<span className={s.dim}>vs</span>{' '}<Civ civ={them.civ} />
+          <span className={s.dim}>{' · ' + (any.map || '?') + ' · ' + day(any.started_at) + ' · '}</span>
+          <span className="mono">{mmss(any.duration_sec)}</span>
+          <span className={s.dim}>{' long · ' + (me.result === 'win' ? me.name + ' won' : me.result === 'loss' ? them.name + ' won' : 'result unknown')}</span>
+        </p>
+      </div>
+      {actions && <div className={s.actions}>{actions}</div>}
+    </div>
+  );
+}
 
+/** The Twitch buttons for whoever streamed the game. */
+export function VodButtons({ P }: { P: Sides }) {
+  return (
+    <>
+      {[P.me, P.them].map((p, i) => p.vod && (
+        <a key={i} className={s.btn + ' ' + s.twitch} href={p.vod} target="_blank" rel="noopener noreferrer" title={'Open ' + p.name + "'s Twitch VOD at the start of the game"}>
+          <VodIcon /><span>{p.name}'s VOD</span>
+        </a>
+      ))}
+    </>
+  );
+}
+
+/** The age columns: heads, their lane, where they meet, your lane. */
+export const AgeGrid = forwardRef<HTMLDivElement, {
+  P: Sides; scales: Record<string, number>; window: Win; pin: Pin | null; only: number[] | null;
+  /** Narrow screens scroll the ages sideways (the game page). */
+  scroll?: boolean;
+}>(function AgeGrid({ P, scales, window, pin, only, scroll = false }, ref) {
   const label = (p: Player, role: string, cls: 'p1' | 'p2') => (
     <div className={s.label}>
       <span className="label">{role}</span>
@@ -62,47 +95,63 @@ export function Board({ gameId, profileId, window, version, pin, only }: {
       {(p.result === 'win' || p.result === 'loss') && <span className={s.sub + ' ' + s[p.result]}>{p.result === 'win' ? 'Won' : 'Lost'}</span>}
     </div>
   );
-
   return (
-    <div className={s.board}>
-      <div className={s.head}>
-        <div>
-          <h2 className={s.title}><span className="c-p1">{P.me.name}</span><span className={s.vs}>vs</span><span className="c-p2">{P.them.name}</span></h2>
-          <p className={s.headSub}>
-            <Civ civ={P.me.civ} />{' '}<span className={s.dim}>vs</span>{' '}<Civ civ={P.them.civ} />
-            <span className={s.dim}>{' · ' + (any.map || '?') + ' · ' + day(any.started_at) + ' · '}</span>
-            <span className="mono">{mmss(any.duration_sec)}</span>
-            <span className={s.dim}>{' long · ' + (P.me.result === 'win' ? P.me.name + ' won' : P.me.result === 'loss' ? P.them.name + ' won' : 'result unknown')}</span>
-          </p>
+    <div className={scroll ? s.scroller : undefined} ref={ref}>
+      <div className={s.grid}>
+        <div className={s.row + ' ' + s.heads}>
+          <span />
+          {WINDOWS.map((w) => <span key={w} data-age={w} className={'label' + (window === w ? ' ' + s.now : '')}>{AGE_SHORT[w]} → {NEXT[w]}</span>)}
         </div>
-        <a className={s.out} href={aoe4worldGame(profileId, gameId)} target="_blank" rel="noopener noreferrer">Open on aoe4world</a>
+        <div className={s.lane + ' ' + s.side}>
+          <div className={s.row}>{label(P.them, 'Opponent', 'p2')}{WINDOWS.map((w) => <PlayerCell key={w} p={P.them} w={w} cls="p2" scale={scales[w] || 1} now={window === w} />)}</div>
+        </div>
+        <div className={s.lane + ' ' + s.meet}>
+          <div className={s.row}><div className={s.label}><span className="label">Where they meet</span></div>{WINDOWS.map((w) => <MeetCell key={w} me={P.me} them={P.them} w={w} now={window === w} />)}</div>
+        </div>
+        <div className={s.lane + ' ' + s.side}>
+          <div className={s.row}>{label(P.me, 'Player', 'p1')}{WINDOWS.map((w) => <PlayerCell key={w} p={P.me} w={w} cls="p1" scale={scales[w] || 1} now={window === w} />)}</div>
+        </div>
       </div>
+    </div>
+  );
+});
 
-      <div className={s.row + ' ' + s.heads}>
-        <span />
-        {WINDOWS.map((w) => <span key={w} className={'label' + (window === w ? ' ' + s.now : '')}>{AGE_SHORT[w]} → {NEXT[w]}</span>)}
-      </div>
-      <div className={s.lane + ' ' + s.side}>
-        <div className={s.row}>{label(P.them, 'Opponent', 'p2')}{WINDOWS.map((w) => <PlayerCell key={w} p={P.them} w={w} cls="p2" scale={scales[w] || 1} now={window === w} />)}</div>
-      </div>
-      <div className={s.lane + ' ' + s.meet}>
-        <div className={s.row}><div className={s.label}><span className="label">Where they meet</span></div>{WINDOWS.map((w) => <MeetCell key={w} me={P.me} them={P.them} w={w} now={window === w} />)}</div>
-      </div>
-      <div className={s.lane + ' ' + s.side}>
-        <div className={s.row}>{label(P.me, 'Player', 'p1')}{WINDOWS.map((w) => <PlayerCell key={w} p={P.me} w={w} cls="p1" scale={scales[w] || 1} now={window === w} />)}</div>
-      </div>
+/** The side panel beside the list on wide screens. */
+export function Board({ gameId, profileId, window, version, pin, only }: {
+  gameId: number; profileId: number; window: Win; version: string; pin: Pin | null; only: number[] | null;
+}) {
+  const { data, error } = useJson<GameResponse>(withVersion('/api/game?id=' + gameId, version));
+  const scrollTop = useRef<HTMLDivElement>(null);
+  // A new game starts at the top of the panel.
+  useEffect(() => { scrollTop.current?.closest('aside')?.scrollTo({ top: 0 }); }, [gameId, profileId]);
+  if (error) return <p className={s.empty}>Could not load the game ({error.message}).</p>;
+  if (!data || data.game_id !== gameId) return <p className={s.empty}>Loading the game…</p>;
+  const P = playersOf(data.rows, profileId, data.vods);
+  if (!P) return <p className={s.empty}>This game has no rows for that player.</p>;
+  return (
+    <div className={s.board} ref={scrollTop}>
+      <GameHead P={P} actions={
+        <>
+          <VodButtons P={P} />
+          <a className={s.btn} href={aoe4worldGame(profileId, gameId)} target="_blank" rel="noopener noreferrer">aoe4world</a>
+          <Link className={s.btn + ' ' + s.primary} to={paths.game(gameId, { p: profileId, window })} title="Open this game on its own page">Open game page</Link>
+        </>
+      } />
+      <AgeGrid P={P} scales={data.scales || {}} window={window} pin={pin} only={only} />
     </div>
   );
 }
 
 function PlayerCell({ p, w, cls, scale, now }: { p: Player; w: Win; cls: 'p1' | 'p2'; scale: number; now: boolean }) {
   const r = p.w[w];
-  if (!r) return <div className={s.cell + (now ? ' ' + s.now : '')}><p className={s.gone}>Did not reach the {AGE[w]}.</p></div>;
+  if (!r) return <div className={s.cell + (now ? ' ' + s.now : '')} data-age={w}><p className={s.gone}>Did not reach the {AGE[w]}.</p></div>;
   const d = side(r, '');
-  if (!d) return <div className={s.cell} />;
+  if (!d) return <div className={s.cell} data-age={w} />;
   const via = d.reached ? ageUp(d.costSource) : null;
+  const watch = vodAt(p.vod, d.start);
+  const notes = d.flags.filter((f) => f !== 'next_age_not_reached').map((f) => FLAG_TEXT[f] || f);
   return (
-    <div className={s.cell + (now ? ' ' + s.now : '')}>
+    <div className={s.cell + (now ? ' ' + s.now : '')} data-age={w}>
       <div className={s.top}>
         <Ratio v={d.combined} className={s.ratio} />
         <span className={s.span} title={d.reached ? 'Reached ' + NEXT[w] + ' at ' + mmss(d.end) : 'Did not reach ' + NEXT[w] + '; the age runs to the end of the game'}>
@@ -110,10 +159,15 @@ function PlayerCell({ p, w, cls, scale, now }: { p: Player; w: Win; cls: 'p1' | 
         </span>
       </div>
       <Bar d={d} scale={scale} side={cls} />
-      {via && (
-        <p className={s.via} title={'Reached ' + NEXT[w] + ' through ' + via.name}>
-          <ItemIcon item={via} size={18} /><span className={s.viaName}>{via.name}</span>
-        </p>
+      {(via || watch) && (
+        <div className={s.via}>
+          {via && <span className={s.viaIn} title={'Reached ' + NEXT[w] + ' through ' + via.name}><ItemIcon item={via} size={18} /><span className={s.viaName}>{via.name}</span></span>}
+          {watch && (
+            <a className={s.watch} href={watch} target="_blank" rel="noopener noreferrer" title={'Watch ' + p.name + "'s " + AGE[w] + ' on Twitch, from ' + mmss(d.start)}>
+              <VodIcon size={13} /><span className="mono">{mmss(d.start)}</span>
+            </a>
+          )}
+        </div>
       )}
       <table className={s.made}>
         <colgroup><col className={s.cN} /><col /><col className={s.cV} /></colgroup>
@@ -143,6 +197,7 @@ function PlayerCell({ p, w, cls, scale, now }: { p: Player; w: Win; cls: 'p1' | 
           <tr className={s.spent}><td colSpan={3}>{res(d.spend)} on military, against {res(d.cost)} for {NEXT[w]}</td></tr>
         </tbody>
       </table>
+      {notes.length > 0 && <p className={s.flags}>Note: {notes.join('; ')}.</p>}
     </div>
   );
 }
@@ -168,5 +223,7 @@ function MeetCell({ me, them, w, now }: { me: Player; them: Player; w: Win; now:
       lines.push(<>{who(a.reached ? me : them, a.reached ? 'p1' : 'p2')} reached {NEXT[w]}; the other never did.</>);
     } else lines.push(<>Neither reached {NEXT[w]}.</>);
   }
-  return <div className={s.cell + (now ? ' ' + s.now : '')}>{lines.map((l, i) => <p key={i}>{l}</p>)}</div>;
+  return <div className={s.cell + (now ? ' ' + s.now : '')} data-age={w}>{lines.map((l, i) => <p key={i}>{l}</p>)}</div>;
 }
+
+export const boardStyles = s;

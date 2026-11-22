@@ -25,7 +25,7 @@ function statusText(st: ListState, data: RowsResponse, shown: number, wide: bool
   if (own) parts.push(total + ' in the chosen range');
   let t = parts.join(', ') + '.';
   if (shown < total) t += ' Showing the first ' + shown + '.';
-  return t + (shown ? (wide ? ' Pick one to see the whole game; the arrow keys move through the list.' : ' Tap one to see what both players made.') : '');
+  return t + (shown ? (wide ? ' Pick one to see the whole game; the arrow keys move through the list.' : ' Tap one to open the whole game.') : '');
 }
 
 export function GameList({ players, top, intro }: {

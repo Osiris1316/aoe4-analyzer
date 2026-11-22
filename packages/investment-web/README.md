@@ -8,12 +8,17 @@ The pages are a React app (React 19, React Router 7, Vite), built the same way a
 
 | Address | Page |
 |---|---|
-| `/` | **Games**: every analysed player-game, one card per player per age with the opponent's same age beside it. On wide screens the picked game fills a board on the right. With a pinned player it opens on their games, with a switch to everyone. |
+| `/` | **Games**: every analysed player-game, one card per player per age with the opponent's same age beside it. On wide screens the picked game fills a board on the right, with a link to its own page; on phones a card opens the game's page. With a pinned player it opens on their games, with a switch to everyone. |
+| `/games/:id` | **A game**: both players across every age, where they meet, what each made, how they aged up, and their Twitch VODs. `?p=` picks whose side is "Player" (Swap sides flips it); `?window=` is the age in view. Below desktop width the three ages sit in a sideways scroller with age buttons to jump between them. |
 | `/players` | **Players**: the tracked people as one row each, after aoe4world's rankings. Civs as flags, games, win-loss, share won, and per age the median military and the usual time they reached the next age, then last game and backfill progress. Every comparable column sorts; the order stays in the address. The search narrows the table and also finds anyone else in the analysed games. |
 | `/players/:id` | **A player's overview**: how they invest in each age (the spread on the cards' scale, split into units, production and defense), when and how they reach the next age (with the landmarks or wings they use), the same by civ, and their record against each civ and on each map. Any of a person's accounts opens it; alts are combined. |
 | `/players/:id/games` | **A player's games**: the same cards, filters, age path and board as Games, only theirs. |
 
 The game list's filters live in the address (`?window=feudal&civ=french&r_dark=combined:0:0.5`), so a link opens with them set and the back button walks real pages. Old `#view=...` links and bookmarks turn into these addresses on load.
+
+**Civ pickers** show flags: the filters' pickers show only the flag, and the list shows flag and name.
+
+**Twitch VODs** come from the v2 `games` table (`p0_twitch_vod_url`, `p1_twitch_vod_url`), which retrieval fills from aoe4world's game list (`twitch_video_url`, the streamer's video with `?t=` at the game's start). Cards with a VOD show a small video mark, a filter keeps only those games, and the game page links each player's VOD at the start of the game and at the start of each age (the `t` offset plus the age's start in game seconds). Only https Twitch addresses become links.
 
 **Pinning** works like following in the league manager: pin one player and this browser remembers them (localStorage only; nothing is stored on the server).
 

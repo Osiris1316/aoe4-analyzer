@@ -21,6 +21,8 @@ export interface Row {
   ratio_production: number; ratio_units: number; ratio_defense: number; ratio_combined: number; ratio_walls: number;
   items_json: string | null; flags_json: string | null;
   opp_group?: string | null; opp_person?: string | null;
+  /** This player's and the opponent's Twitch VOD at the game's start (list rows only). */
+  vod_url?: string | null; opp_vod_url?: string | null;
   [k: `opp_${string}`]: unknown;
 }
 
@@ -30,7 +32,11 @@ export interface RowsResponse {
   version: string | null; window: Win; rows: Row[]; total: number; inPath: number; scale: number; histogram: Histogram | null;
 }
 
-export interface GameResponse { version: string | null; game_id: number; rows: Row[]; scales: Record<string, number> }
+export interface GameResponse {
+  version: string | null; game_id: number; rows: Row[]; scales: Record<string, number>;
+  /** Twitch VOD at the game's start, by profile id. */
+  vods?: Record<string, string>;
+}
 
 export interface Backfill {
   requestedAt: string; months: number; listed: number; oldestListed: string | null; complete: boolean;

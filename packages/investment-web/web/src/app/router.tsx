@@ -7,6 +7,7 @@ import { PlayersPage } from '../pages/players/PlayersPage';
 import { PlayerLayout } from '../pages/player/PlayerLayout';
 import { PlayerOverview } from '../pages/player/PlayerOverview';
 import { PlayerGames } from '../pages/player/PlayerGames';
+import { GamePage } from '../pages/game/GamePage';
 
 export function createAppRouter() {
   return createBrowserRouter([
@@ -16,6 +17,7 @@ export function createAppRouter() {
       errorElement: <RouteError />,
       children: [
         { index: true, element: <GamesPage /> },
+        { path: 'games/:id', element: <GamePage /> },
         { path: 'players', element: <PlayersPage /> },
         {
           path: 'players/:id',
