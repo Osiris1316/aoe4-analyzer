@@ -1,0 +1,100 @@
+.board { padding: 2px 0 40px; }
+.empty { margin: 60px 0; text-align: center; color: var(--faint); font-size: var(--text-md); }
+
+/* Head: who played whom, the game, and the ways out */
+.head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 20px; padding: 4px 0 18px; }
+.headMain { min-width: 0; }
+.title { margin: 0; font-size: var(--text-2xl); font-weight: 600; letter-spacing: -0.015em; line-height: 1.25; overflow-wrap: anywhere; }
+.vs { margin: 0 8px; color: var(--faint); font-weight: 400; font-size: var(--text-lg); }
+.headSub { margin: 6px 0 0; font-size: var(--text-sm); color: var(--fg-2); }
+.headSub :global(.mono) { font-size: var(--text-xs); color: var(--faint); }
+.dim { color: var(--muted); }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: transparent;
+  color: var(--fg-2); text-decoration: none; font-size: var(--text-sm); white-space: nowrap;
+}
+.btn:hover { border-color: var(--faint); color: var(--fg); }
+.primary { background: var(--primary-bg); border-color: var(--primary-bg); color: var(--primary-fg); font-weight: 500; }
+.primary:hover { color: var(--primary-fg); opacity: 0.9; }
+.twitch { color: var(--fg); }
+
+/* One grid for the heads and every lane, so the age columns line up all the way down */
+.row { display: grid; grid-template-columns: 9.5rem repeat(3, minmax(0, 1fr)); column-gap: 14px; }
+.heads { padding: 0 14px 8px; }
+.heads > span { padding-left: 10px; }
+.heads .now { color: var(--fg); }
+.lane { padding: 8px 10px; border-radius: var(--radius-lg); }
+.side { background: color-mix(in srgb, var(--surface) 75%, transparent); border: 1px solid var(--line-soft); }
+.meet { padding-top: 10px; padding-bottom: 10px; }
+.lane + .lane { margin-top: 8px; }
+
+.label { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-top: 10px; }
+.meet .label { padding-top: 6px; }
+.name { font-size: var(--text-lg); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
+a.name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.name.p1 { color: var(--p1); } .name.p2 { color: var(--p2); }
+.sub { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--muted); min-width: 0; }
+.sub.win { color: var(--ok); } .sub.loss { color: var(--danger); }
+
+.cell { min-width: 0; padding: 8px 10px; border-radius: var(--radius-md); }
+.cell.now { background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); }
+.top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 8px; margin-bottom: 6px; }
+.ratio { font-family: var(--mono); font-size: var(--text-lg); font-weight: 600; white-space: nowrap; }
+.span { font-family: var(--mono); font-size: var(--text-xs); color: var(--faint); white-space: nowrap; }
+.gone { margin: 8px 0; font-size: var(--text-sm); color: var(--faint); }
+
+/* The age-up they used, and the VOD from this age's start */
+.via { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; margin-top: 8px; font-size: var(--text-sm); color: var(--fg-2); }
+.viaIn { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.viaName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watch {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; margin-left: auto; height: 24px; padding: 0 8px;
+  border: 1px solid var(--line); border-radius: 999px; color: var(--fg-2); text-decoration: none; font-size: var(--text-xs);
+}
+.watch:hover { border-color: var(--faint); color: var(--fg); }
+
+.made { width: 100%; margin-top: 8px; border-collapse: collapse; table-layout: fixed; font-size: var(--text-sm); }
+.made col.cN { width: 2.6em; } .made col.cV { width: 3.6em; }
+.made td, .made th { padding: 0; line-height: 1.4; vertical-align: middle; }
+.made tbody tr:not(.cat) td { padding-top: 2px; padding-bottom: 2px; }
+.cat th, .cat td { padding-top: 8px !important; padding-bottom: 2px; }
+.made tbody:first-of-type .cat th, .made tbody:first-of-type .cat td { padding-top: 0 !important; }
+.cat th { text-align: left; font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note { font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--faint); margin-left: 4px; }
+.cat td { text-align: right; font-family: var(--mono); font-weight: 600; color: var(--fg-2); }
+.n { text-align: right; font-family: var(--mono); color: var(--fg-2); padding-right: 8px !important; }
+.itemCell { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--fg-2); }
+.itemName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spent td { padding-top: 7px !important; border-top: 1px solid var(--line-soft); color: var(--faint); font-size: var(--text-xs); }
+.flags { margin: 6px 0 0; font-size: var(--text-xs); color: var(--warn); }
+
+.meet .cell { padding-top: 6px; padding-bottom: 6px; font-size: var(--text-sm); color: var(--muted); }
+.meet .cell p { margin: 0 0 2px; }
+.who { font-weight: 500; }
+.meet .cell :global(.mono) { color: var(--fg-2); }
+
+/* Narrower desktops: each lane's label sits above its cells, giving the ages the full width. */
+@media (max-width: 1399px) {
+  .row { grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 10px; }
+  .heads > span:first-child { display: none; }
+  .row > .label { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 0 10px 4px; }
+  .name { font-size: var(--text-md); }
+}
+
+/* The game page below desktop width: the three ages side by side in a sideways
+   scroller, one age about a screen wide, the next peeking in. Lane labels stay put. */
+@media (max-width: 1099px) {
+  .scroller {
+    --age-col: min(84vw, 380px);
+    overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x mandatory;
+    margin: 0 calc(-1 * var(--gutter)); padding: 0 var(--gutter) 6px; scroll-padding-inline: var(--gutter);
+    scrollbar-width: thin;
+  }
+  .scroller .grid { width: max-content; }
+  .scroller .row { grid-template-columns: repeat(3, var(--age-col)); column-gap: 10px; }
+  .scroller .heads { padding: 0 10px 8px; }
+  .scroller .heads > span { scroll-snap-align: start; }
+  .scroller .row > .label { position: sticky; left: 0; width: max-content; max-width: calc(100vw - 2 * var(--gutter) - 24px); }
+}

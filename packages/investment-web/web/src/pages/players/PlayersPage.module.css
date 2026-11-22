@@ -1,0 +1,93 @@
+.head { padding-top: 22px; }
+.title { margin: 0; font-size: var(--text-2xl); font-weight: 600; letter-spacing: -0.015em; }
+.note { margin: 4px 0 0; max-width: 90ch; color: var(--muted); font-size: var(--text-sm); }
+
+.tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 18px; }
+.find { flex: 0 1 360px; min-width: 220px; }
+.find input { width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); color: var(--fg); font-size: var(--text-md); }
+.groups { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.groups button { all: unset; cursor: pointer; padding: 4px 11px; border-radius: 6px; font-size: var(--text-sm); color: var(--muted); text-transform: capitalize; }
+.groups button:focus-visible { outline: 2px solid var(--focus); }
+.groups button[aria-pressed="true"] { background: var(--raised); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* The table: one row per person, every number right-aligned in a fixed column */
+.scroller { margin-top: 16px; overflow-x: auto; border: 1px solid var(--line-soft); border-radius: var(--radius-lg); background: var(--surface); }
+.table { width: 100%; min-width: 1180px; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: var(--text-md); }
+.cPlayer { width: 270px; } .cCivs { width: 118px; } .cGames { width: 70px; } .cWl { width: 92px; } .cWin { width: 64px; }
+.cMil { width: 82px; } .cUp { width: 82px; } .cLast { width: 122px; } .cBf { width: 108px; }
+
+.table th, .table td { padding: 0 12px; white-space: nowrap; }
+.table thead th {
+  height: 30px; font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint);
+  background: var(--surface); vertical-align: bottom; padding-bottom: 8px;
+}
+.table thead .groupRow th { padding-top: 12px; }
+.table thead .subRow th { padding-top: 0; }
+.table thead tr:last-child th, .table thead th[rowspan] { border-bottom: 1px solid var(--line); }
+.left { text-align: left; }
+.ageHead { text-align: center; color: var(--muted) !important; border-left: 1px solid var(--line-soft); }
+.ageHead span { color: var(--faint); font-weight: 500; }
+.groupRow .ageHead { padding-bottom: 4px !important; }
+.ageHead { box-shadow: inset 0 -1px 0 var(--line-soft); }
+.wlHead { text-align: center; }
+.ageStart { border-left: 1px solid var(--line-soft); }
+
+.row td, .row th { height: 46px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+.row:last-child td, .row:last-child th { border-bottom: 0; }
+.row { cursor: pointer; }
+.row:hover td, .row:hover th { background: var(--hover); }
+.pinned th.player { box-shadow: inset 3px 0 0 var(--fg-2); }
+
+/* Player: pin, name, group, accounts */
+.player { text-align: left; font-weight: 400; }
+.playerIn { display: flex; align-items: center; gap: 8px; min-width: 0; margin-left: -6px; }
+.name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: var(--fg); text-decoration: none; }
+.playerIn :global(.tag) { flex: 0 0 auto; }
+.name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.alts { flex: 0 0 auto; font-size: var(--text-xs); color: var(--faint); }
+
+.civs { text-align: left; }
+.flags { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; }
+.more { font-size: var(--text-xs); color: var(--faint); margin-left: 2px; }
+
+.num { text-align: right; font-family: var(--mono); color: var(--fg-2); }
+.mil { font-weight: 600; color: var(--fg); }
+.up { color: var(--muted); }
+.zero { color: var(--faint); }
+/* W–L: wins right-aligned, losses left-aligned, so the dash lines up down the column */
+.wl { font-family: var(--mono); color: var(--fg-2); text-align: center; }
+.w, .l { display: inline-block; width: 4ch; }
+.w { text-align: right; } .l { text-align: left; }
+.dash { display: inline-block; width: 1.4ch; text-align: center; color: var(--faint); }
+.last { text-align: left; color: var(--muted); font-size: var(--text-sm); }
+
+.bf { text-align: left; font-size: var(--text-xs); color: var(--muted); }
+.bfWrap { display: inline-flex; align-items: center; gap: 8px; }
+.track { display: inline-block; width: 44px; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
+.fill { display: block; height: 100%; background: var(--fg-2); opacity: 0.7; }
+.done { color: var(--faint); }
+.none { padding: 24px 12px !important; color: var(--faint); text-align: left; }
+
+/* Phones and tablets: the table scrolls sideways under a fixed first column */
+@media (max-width: 1099px) {
+  .cPlayer { width: 190px; }
+  .player { position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: 1px 0 0 var(--line-soft); }
+  .table thead th.player { z-index: 2; }
+  .alts { display: none; }
+  .row:hover th.player { background: var(--hover); }
+  .pinned th.player { box-shadow: inset 3px 0 0 var(--fg-2), 1px 0 0 var(--line-soft); }
+}
+@media (max-width: 639px) {
+  .playerIn :global(.tag) { display: none; }
+  .cPlayer { width: 160px; }
+}
+
+.others { margin-top: 24px; max-width: 520px; }
+.others h2 { margin: 0 0 6px; }
+.otherNote { margin: 0; font-size: var(--text-sm); color: var(--faint); }
+.others ol { list-style: none; margin: 0; padding: 4px; border: 1px solid var(--line-soft); border-radius: var(--radius-lg); background: var(--surface); }
+.others a { display: grid; grid-template-columns: minmax(0, 1fr) 5.6em 4.4em; align-items: baseline; gap: 10px; padding: 7px 10px; border-radius: var(--radius-md); color: var(--fg); text-decoration: none; }
+.others a:hover { background: var(--hover); }
+.others .mono { text-align: right; font-size: var(--text-xs); color: var(--muted); }
+.otherName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.add { margin: 24px 0 0; max-width: 64ch; font-size: var(--text-xs); color: var(--faint); }

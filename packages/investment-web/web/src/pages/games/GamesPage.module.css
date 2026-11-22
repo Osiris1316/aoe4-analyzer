@@ -1,0 +1,11 @@
+.intro { margin: 16px 0 6px; max-width: 62ch; color: var(--muted); font-size: var(--text-sm); }
+
+/* With a pin: their games or everyone's */
+.who { display: inline-flex; max-width: 100%; margin-top: 16px; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.who button {
+  all: unset; display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 5px 12px; border-radius: 6px;
+  font-size: var(--text-sm); color: var(--muted); cursor: pointer;
+}
+.who button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.who button[aria-pressed="true"] { background: var(--raised); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line); }
+.whoName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16em; }

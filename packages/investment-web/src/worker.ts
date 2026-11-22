@@ -5,7 +5,7 @@
  *   npx wrangler deploy --config packages/investment-web/wrangler.jsonc
  * The live API Worker (root wrangler.jsonc, bound to v1) is not touched.
  *
- * The page (public/) is served as static assets; this Worker answers /api/*:
+ * The page (web/, built to dist/) is served as static assets; this Worker answers /api/*:
  *   GET /api/meta  -> versions, newest version, civs, groups, counts, last update
  *   GET /api/rows  -> result rows for one version and age window, filtered and sorted
  *     ?version=v1&window=dark|feudal|castle&group=all|tracked|untracked|<group>
@@ -15,8 +15,11 @@
  *        a range on this window filters the list. ratio: combined|production|units|defense|walls
  *     &hm=<ratio>   which ratio the histogram shows when this window has no range
  *     &player=<id>[,<id>]  only these accounts (a person's alts, or the pinned player)
+ *     &vod=1  only games where either player has a Twitch VOD
  *   GET /api/game?id=<game_id>[&version=v1] -> every row of one game (both players,
- *     every age window) and the bar scale of each window, for the desktop board
+ *     every age window), the bar scale of each window, and each player's Twitch VOD
+ *   Twitch VODs come from the games table (p0/p1_twitch_vod_url), which retrieval fills
+ *   from aoe4world's game list (twitch_video_url) when the game is stored.
  *   GET /api/players, /api/player?id= -> the player list and one person's profile (src/players.ts)
  *   Each row carries the opponent's row for the same game and age window as opp_*
  *   columns (null when the opponent never reached that age), so a card can show
@@ -167,6 +170,10 @@ async function rows(db: D1Database, url: URL): Promise<Response> {
   const q = (p.get('q') || '').trim();
   if (q) { where.push('(r.player_name LIKE ? OR r.person LIKE ?)'); binds.push(`%${q}%`, `%${q}%`); }
   if (p.get('reached') === '1') where.push('r.reached_next_age = 1');
+  if (p.get('vod') === '1') {
+    where.push(`EXISTS (SELECT 1 FROM games v WHERE v.game_id = r.game_id
+      AND (v.p0_twitch_vod_url IS NOT NULL OR v.p1_twitch_vod_url IS NOT NULL))`);
+  }
   const only = playerFilter(p);
   if (only) { where.push(only.sql); binds.push(...only.binds); }
 
@@ -216,11 +223,14 @@ async function rows(db: D1Database, url: URL): Promise<Response> {
       o.spend_production AS opp_spend_production, o.spend_units AS opp_spend_units, o.spend_defense AS opp_spend_defense, o.spend_walls AS opp_spend_walls,
       o.ratio_production AS opp_ratio_production, o.ratio_units AS opp_ratio_units, o.ratio_defense AS opp_ratio_defense,
       o.ratio_combined AS opp_ratio_combined, o.ratio_walls AS opp_ratio_walls,
-      o.items_json AS opp_items_json, o.flags_json AS opp_flags_json
+      o.items_json AS opp_items_json, o.flags_json AS opp_flags_json,
+      CASE WHEN g.p0_profile_id = r.profile_id THEN g.p0_twitch_vod_url ELSE g.p1_twitch_vod_url END AS vod_url,
+      CASE WHEN g.p0_profile_id = r.profile_id THEN g.p1_twitch_vod_url ELSE g.p0_twitch_vod_url END AS opp_vod_url
     FROM investment_results r
     LEFT JOIN investment_results o
       ON o.metric_version = r.metric_version AND o.game_id = r.game_id
      AND o.profile_id = r.opponent_profile_id AND o.age_window = r.age_window
+    LEFT JOIN games g ON g.game_id = r.game_id
     WHERE ${listWhere}
     ORDER BY r.${sortCol} ${dir}, r.game_id DESC
     LIMIT ?`).bind(...binds, limit).all();
@@ -250,7 +260,13 @@ async function game(db: D1Database, url: URL): Promise<Response> {
       ratio_production, ratio_units, ratio_defense, ratio_combined, ratio_walls, items_json, flags_json
     FROM investment_results WHERE metric_version = ? AND game_id = ?
     ORDER BY profile_id, CASE age_window WHEN 'dark' THEN 1 WHEN 'feudal' THEN 2 ELSE 3 END`).bind(version, id).all();
-  return json({ version, game_id: id, rows: list.results, scales: await allScales(db, version) });
+  // Each player's Twitch VOD, by profile id, when aoe4world had one.
+  const g = await db.prepare(`SELECT p0_profile_id, p1_profile_id, p0_twitch_vod_url, p1_twitch_vod_url FROM games WHERE game_id = ?`)
+    .bind(id).first<{ p0_profile_id: number; p1_profile_id: number; p0_twitch_vod_url: string | null; p1_twitch_vod_url: string | null }>();
+  const vods: Record<string, string> = {};
+  if (g?.p0_twitch_vod_url) vods[String(g.p0_profile_id)] = g.p0_twitch_vod_url;
+  if (g?.p1_twitch_vod_url) vods[String(g.p1_profile_id)] = g.p1_twitch_vod_url;
+  return json({ version, game_id: id, rows: list.results, scales: await allScales(db, version), vods });
 }
 
 async function allScales(db: D1Database, version: string): Promise<Record<string, number>> {

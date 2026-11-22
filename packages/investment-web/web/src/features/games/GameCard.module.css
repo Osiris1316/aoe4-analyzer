@@ -1,0 +1,35 @@
+/* A game card: the result as its left edge, a context line, and two player
+   rows on the same columns as every other card, so numbers line up down the list. */
+.card { background: var(--surface); border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--radius-card); }
+.card.win { border-left-color: color-mix(in srgb, var(--ok) 60%, transparent); }
+.card.loss { border-left-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+.picked { background: var(--raised); box-shadow: 0 0 0 1px var(--fg-2); }
+.face { all: unset; display: block; width: 100%; box-sizing: border-box; padding: 12px 14px 13px 13px; cursor: pointer; border-radius: var(--radius-card); color: inherit; text-decoration: none; -webkit-tap-highlight-color: transparent; }
+.face:hover { background: var(--hover); }
+.picked .face:hover { background: transparent; }
+.face:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* Context line: result, the matchup with flags, the map; group and date at the end */
+.ctx { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 10px; font-size: var(--text-sm); color: var(--muted); }
+.res { font-family: var(--mono); font-weight: 600; width: 1ch; flex: 0 0 auto; }
+.res.win { color: var(--ok); } .res.loss { color: var(--danger); }
+.what { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; color: var(--fg-2); font-weight: 500; }
+.what > span { flex: 0 0 auto; }
+.vsWord, .map { color: var(--muted); font-weight: 400; }
+.what > .map { overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.date { flex: 0 0 auto; font-family: var(--mono); font-size: var(--text-xs); color: var(--faint); }
+.vod { flex: 0 0 auto; display: inline-flex; color: var(--muted); }
+
+/* The two player rows: ratio | name | bar | age-up time */
+.duel { display: grid; row-gap: 7px; }
+.prow { display: grid; grid-template-columns: var(--col-ratio) var(--col-name) minmax(0, 1fr) var(--col-time); column-gap: 10px; align-items: center; min-height: 20px; }
+.ratio { font-family: var(--mono); font-size: var(--text-md); font-weight: 600; text-align: right; white-space: nowrap; color: var(--fg); }
+.p2 .ratio { color: var(--fg-2); }
+.pname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-md); }
+.p1 .pname { color: var(--p1); font-weight: 600; }
+.p2 .pname { color: var(--p2); font-weight: 500; }
+.time { font-family: var(--mono); font-size: var(--text-sm); color: var(--muted); text-align: right; white-space: nowrap; }
+.none .ratio, .none .time { color: var(--faint); font-weight: 400; }
+.missing { font-size: var(--text-xs); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pinned { white-space: nowrap; }
+.pinMark { width: 11px !important; height: 11px !important; margin-right: 4px; vertical-align: -1px; color: var(--fg-2); }

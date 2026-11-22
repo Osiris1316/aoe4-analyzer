@@ -1,0 +1,68 @@
+/* Design tokens for every page. Language from league-manager (by way of the
+   matchup library): neutral near-black surfaces, Inter, a small type scale,
+   thin lines, colour only where it means something, and room between things.
+   From the aoe4 analyzer's battle cards: the two players in amber and blue and
+   numbers in JetBrains Mono, always in tabular figures so digits line up. */
+
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/inter-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/inter-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/inter-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/jetbrains-mono-latin-600-normal.woff2") format("woff2"); }
+
+:root {
+  /* Surfaces, from the page back to the most raised */
+  --bg: #0c0c0d; --surface: #131315; --raised: #1a1a1d; --hover: #18181b;
+  /* Lines */
+  --line: #2a2a2f; --line-soft: #1f1f23;
+  /* Text, strongest first */
+  --fg: #ededed; --fg-2: #c4c4ca; --muted: #a1a1a7; --faint: #8a8a92;
+  /* Actions and states */
+  --primary-bg: #ededed; --primary-fg: #0c0c0d; --focus: #6ea8fe;
+  --ok: #7cc192; --danger: #d27a7a; --warn: #e08a4a;
+  /* The two players, after the analyzer's amber and blue, a little quieter */
+  --p1: #d6a14e; --p2: #5a98d6;
+  /* Bars: the empty track, and the notch cut at each whole age-up */
+  --track: #1d1d21; --notch: var(--surface);
+  /* Icon tiles stay dark in both themes: aoe4world's icons are gold on clear */
+  --tile: #222227; --tile-line: #34343a;
+
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-2xs: 10px; --text-xs: 11px; --text-sm: 12px; --text-md: 13px; --text-lg: 15px; --text-2xl: 20px;
+  --radius-sm: 5px; --radius-md: 8px; --radius-card: 10px; --radius-lg: 12px;
+
+  /* One page width for every page, so edges line up when you move between them */
+  --page-max: 1760px; --gutter: 16px;
+  /* Reading width for a single column of cards on mid-size screens */
+  --column: 760px;
+
+  /* Columns of a card's player row: ratio | name | bar | age-up time */
+  --col-ratio: 3.5rem; --col-name: 6.6rem; --col-time: 2.9rem;
+  /* Number columns of the opened card's table */
+  --col-num: 5.4rem;
+
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f4f2; --surface: #ffffff; --raised: #f7f7f5; --hover: #fafaf8;
+    --line: #d9d9d5; --line-soft: #e8e8e5;
+    --fg: #16161a; --fg-2: #2e2e34; --muted: #55555d; --faint: #6c6c74;
+    --primary-bg: #1d2b4f; --primary-fg: #ffffff; --focus: #2f5bd3;
+    --ok: #2c7a4b; --danger: #b0443c; --warn: #b25c17;
+    --p1: #b07a1e; --p2: #2a6bb0;
+    --track: #ececea; --notch: var(--surface);
+    --tile: #2a2a30; --tile-line: #2a2a30;
+    color-scheme: light;
+  }
+}
+@media (min-width: 640px) {
+  :root { --col-name: 10rem; --col-num: 7rem; --gutter: 24px; }
+}
+@media (min-width: 1100px) {
+  :root { --gutter: 32px; }
+}
+@media (min-width: 1100px) and (max-width: 1399px) {
+  :root { --gutter: 24px; }
+}
