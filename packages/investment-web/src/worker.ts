@@ -14,8 +14,10 @@
  *        a range on an earlier window keeps only player-games whose earlier row is in it;
  *        a range on this window filters the list. ratio: combined|production|units|defense|walls
  *     &hm=<ratio>   which ratio the histogram shows when this window has no range
+ *     &player=<id>[,<id>]  only these accounts (a person's alts, or the pinned player)
  *   GET /api/game?id=<game_id>[&version=v1] -> every row of one game (both players,
  *     every age window) and the bar scale of each window, for the desktop board
+ *   GET /api/players, /api/player?id= -> the player list and one person's profile (src/players.ts)
  *   Each row carries the opponent's row for the same game and age window as opp_*
  *   columns (null when the opponent never reached that age), so a card can show
  *   both players. `scale` is the bar scale for the window: the 95th percentile of
@@ -24,6 +26,8 @@
  *
  * Only SELECTs with bound parameters; sort columns come from a fixed list.
  */
+
+import { player, playerFilter, players } from './players';
 
 interface D1Result<T> {
   results: T[];
@@ -163,6 +167,8 @@ async function rows(db: D1Database, url: URL): Promise<Response> {
   const q = (p.get('q') || '').trim();
   if (q) { where.push('(r.player_name LIKE ? OR r.person LIKE ?)'); binds.push(`%${q}%`, `%${q}%`); }
   if (p.get('reached') === '1') where.push('r.reached_next_age = 1');
+  const only = playerFilter(p);
+  if (only) { where.push(only.sql); binds.push(...only.binds); }
 
   // The path: ranges on earlier windows.
   const path: Range[] = [];
@@ -244,9 +250,13 @@ async function game(db: D1Database, url: URL): Promise<Response> {
       ratio_production, ratio_units, ratio_defense, ratio_combined, ratio_walls, items_json, flags_json
     FROM investment_results WHERE metric_version = ? AND game_id = ?
     ORDER BY profile_id, CASE age_window WHEN 'dark' THEN 1 WHEN 'feudal' THEN 2 ELSE 3 END`).bind(version, id).all();
+  return json({ version, game_id: id, rows: list.results, scales: await allScales(db, version) });
+}
+
+async function allScales(db: D1Database, version: string): Promise<Record<string, number>> {
   const scales: Record<string, number> = {};
   for (const w of ['dark', 'feudal', 'castle']) scales[w] = await windowScale(db, version, w);
-  return json({ version, game_id: id, rows: list.results, scales });
+  return scales;
 }
 
 export default {
@@ -257,6 +267,8 @@ export default {
       if (url.pathname === '/api/meta') return await meta(env.DB);
       if (url.pathname === '/api/rows') return await rows(env.DB, url);
       if (url.pathname === '/api/game') return await game(env.DB, url);
+      if (url.pathname === '/api/players') return await players(env.DB, url, json);
+      if (url.pathname === '/api/player') return await player(env.DB, url, json, (v) => allScales(env.DB, v));
     } catch (err) {
       console.error('api error', err);
       return json({ error: 'database error' }, 500);

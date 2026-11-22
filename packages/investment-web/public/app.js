@@ -4,6 +4,12 @@
 // Each card is one player's age, with their opponent's same age beside it:
 // collapsed, two aligned rows (ratio, name, bar, age-up time); expanded, a
 // side-by-side table of what each of them made, by category.
+//
+// Three views, chosen by `view` in the address: Games (the cards; the default),
+// Players (the tracked people and a search for anyone), and a player's profile
+// (`view=player&p=<profile id>`: how they invest in each age, by civ, their
+// record, then their games as cards). One player can be pinned in this browser,
+// like following in the league manager: Games then opens on their games.
 (function () {
   'use strict';
 
@@ -26,7 +32,9 @@
   };
 
   // g: the picked game and player on wide screens, "<game_id>.<profile_id>".
-  var state = { window: 'dark', group: 'all', civ: '', vs: '', q: '', reached: false, sort: 'combined', dir: 'desc', version: '', hm: 'combined', g: '' };
+  // view: '' (games) | 'players' | 'player'; p: the profile shown with view=player.
+  var state = { window: 'dark', group: 'all', civ: '', vs: '', q: '', reached: false, sort: 'combined', dir: 'desc', version: '', hm: 'combined', g: '', view: '', p: '' };
+  var VIEWS = { '': 'games', players: 'players', player: 'player' };
   // Wide screens show the picked game on a board beside the list; phones open cards in place.
   var wide = window.matchMedia ? window.matchMedia('(min-width: 1100px)') : { matches: false };
   var rowsByKey = {};
@@ -109,6 +117,10 @@
       state[k] = k === 'reached' ? h.get(k) === '1' : h.get(k);
     });
     if (!NEXT[state.window]) state.window = 'dark';
+    // The view comes from the address alone: a link without one is the games view.
+    state.view = VIEWS[h.get('view') || ''] ? (h.get('view') || '') : '';
+    state.p = /^\d{1,12}$/.test(h.get('p') || '') ? h.get('p') : '';
+    if (state.view === 'player' && !state.p) state.view = '';
     if (!RATIO_NAME[state.hm]) state.hm = 'combined';
     WINDOW_ORDER.forEach(function (w) {
       var raw = h.get('r_' + w);
@@ -212,8 +224,11 @@
     btn.appendChild(ctx);
 
     var duel = el('div', 'duel');
-    duel.appendChild(prow('p1', n.a, a, scale, r.age_window));
-    duel.appendChild(prow('p2', n.b, b, scale, r.age_window));
+    var rowA = prow('p1', n.a, a, scale, r.age_window), rowB = prow('p2', n.b, b, scale, r.age_window);
+    markPinned(rowA.querySelector('.pname'), r.profile_id);
+    markPinned(rowB.querySelector('.pname'), r.opponent_profile_id);
+    duel.appendChild(rowA);
+    duel.appendChild(rowB);
     btn.appendChild(duel);
     li.appendChild(btn);
 
@@ -311,6 +326,15 @@
     link.href = 'https://aoe4world.com/players/' + encodeURIComponent(r.profile_id) + '/games/' + encodeURIComponent(r.game_id);
     link.target = '_blank'; link.rel = 'noopener noreferrer';
     box.appendChild(link);
+    var profiles = el('div', 'plinks');
+    [[n.a, r.profile_id, 'p1'], [n.b, r.opponent_profile_id, 'p2']].forEach(function (x) {
+      if (!x[1]) return;
+      var a2 = el('a', x[2]); a2.href = profileHref(x[1]);
+      a2.appendChild(el('span', 'nm', x[0]));
+      a2.appendChild(document.createTextNode(' profile'));
+      profiles.appendChild(a2);
+    });
+    box.appendChild(profiles);
     return box;
   }
 
@@ -388,7 +412,9 @@
   function boardLabel(p, role, cls) {
     var lab = el('div', 'blabel');
     lab.appendChild(el('span', 't', role));
-    var n = el('span', 'n ' + cls, p.name); n.title = p.name;
+    var n = el('a', 'n ' + cls, p.name); n.title = p.name + ': open their profile';
+    if (p.id) n.href = profileHref(p.id);
+    markPinned(n, p.id);
     lab.appendChild(n);
     lab.appendChild(el('span', 's', civName(p.civ) + (p.group ? ' · ' + p.group : '')));
     if (p.result === 'win' || p.result === 'loss') lab.appendChild(el('span', 's ' + p.result, p.result === 'win' ? 'Won' : 'Lost'));
@@ -611,20 +637,529 @@
     load();
   }
 
+  // ── Pinning: one player per browser, like following in the league manager ──
+  // { id, person, ids: [profile ids of their accounts] }. With a pin, Games opens on
+  // their games (the choice of "Everyone" instead is remembered too).
+  var PIN_KEY = 'aoe4inv.pinned', ALL_KEY = 'aoe4inv.everyone';
+  function readPin() {
+    try {
+      var v = JSON.parse(localStorage.getItem(PIN_KEY) || 'null');
+      return v && v.id && v.ids && v.ids.length ? v : null;
+    } catch (e) { return null; }
+  }
+  function readFlag(k) { try { return localStorage.getItem(k) === '1'; } catch (e) { return false; } }
+  function writeFlag(k, on) { try { localStorage.setItem(k, on ? '1' : '0'); } catch (e) { /* storage off: this visit only */ } }
+  var pinned = readPin(), preferAll = readFlag(ALL_KEY);
+
+  function setPin(p) {
+    pinned = p;
+    try { if (p) localStorage.setItem(PIN_KEY, JSON.stringify(p)); else localStorage.removeItem(PIN_KEY); } catch (e) { /* this visit only */ }
+    if (p) { preferAll = false; writeFlag(ALL_KEY, false); }
+    renderChip();
+  }
+  function isPinnedId(id) { return !!(pinned && id && pinned.ids.indexOf(Number(id)) !== -1); }
+  function pinFrom(person, id, accounts) {
+    return { id: Number(id), person: person, ids: accounts.map(function (a) { return Number(a.profileId); }) };
+  }
+
+  // The accounts the game list is narrowed to: the profile's person, or the pinned player.
+  var profileIds = null;
+  function listPlayers() {
+    if (state.view === 'player') return profileIds || [Number(state.p)];
+    if (state.view === '' && pinned && !preferAll) return pinned.ids;
+    return null;
+  }
+  // A small pin after a name, where the list isn't already only that player.
+  function markPinned(node, id) {
+    if (!node || !isPinnedId(id)) return;
+    var only = listPlayers();
+    if (only && only.indexOf(Number(id)) !== -1) return;
+    node.classList.add('pinned');
+    node.insertBefore(pinIcon(true), node.firstChild);
+    node.setAttribute('title', (node.getAttribute('title') || node.textContent) + ' (pinned)');
+  }
+
+  function pinIcon(filled) {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16'); svg.setAttribute('class', 'pin-svg');
+    svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('focusable', 'false');
+    var path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', 'M10.5 1.5l4 4-2 1-2.5 2.5.5 3-1.5 1.5-3-3L2 14l-.5-.5 3.5-4-3-3L3.5 5l3 .5L9 3z');
+    path.setAttribute('fill', filled ? 'currentColor' : 'none');
+    path.setAttribute('stroke', 'currentColor'); path.setAttribute('stroke-width', '1.3'); path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+    return svg;
+  }
+  function initials(name) {
+    var w = String(name || '?').replace(/\[[^\]]*\]/g, ' ').replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/);
+    var s = w.length > 1 ? w[0].charAt(0) + w[1].charAt(0) : (w[0] || '?').slice(0, 2);
+    return s.toUpperCase();
+  }
+
+  // The chip in the head: the pinned player, or an invitation to pin one.
+  function renderChip() {
+    var c = $('pin-chip');
+    c.textContent = '';
+    if (!pinned) {
+      c.className = 'pin-chip empty';
+      c.href = '#view=players';
+      c.appendChild(pinIcon(false));
+      c.appendChild(el('span', 'nm', 'Pin a player'));
+      c.setAttribute('aria-label', 'Pin a player: open the player list');
+      return;
+    }
+    c.className = 'pin-chip';
+    c.href = profileHref(pinned.id);
+    c.appendChild(el('span', 'av', initials(pinned.person)));
+    c.appendChild(el('span', 'nm', pinned.person));
+    c.setAttribute('aria-label', 'Pinned: ' + pinned.person + '. Open their profile.');
+  }
+  // Games view with a pin: their games or everyone's.
+  function syncWho() {
+    var box = $('who-switch'), show = state.view === '' && !!pinned;
+    box.hidden = !show;
+    $('shell').classList.toggle('one-player', !!listPlayers());
+    if (!show) return;
+    $('who-name').textContent = pinned.person;
+    Array.prototype.forEach.call(box.querySelectorAll('button'), function (b) {
+      b.setAttribute('aria-pressed', String((b.getAttribute('data-who') === 'all') === preferAll));
+    });
+  }
+  function pinButton(person, id, accounts, compact) {
+    var b = el('button', 'pin-btn' + (compact ? ' compact' : ''));
+    b.type = 'button';
+    function paint() {
+      var on = !!(pinned && pinned.id === Number(id));
+      b.textContent = '';
+      b.appendChild(pinIcon(on));
+      if (!compact) b.appendChild(el('span', null, on ? 'Pinned' : 'Pin'));
+      b.setAttribute('aria-pressed', String(on));
+      b.setAttribute('aria-label', on ? 'Unpin ' + person : 'Pin ' + person + ': Games opens on their games');
+      b.title = on ? 'Pinned. Press to unpin.' : 'Pin: Games opens on their games';
+    }
+    b.addEventListener('click', function (e) {
+      e.preventDefault(); e.stopPropagation();
+      setPin(pinned && pinned.id === Number(id) ? null : pinFrom(person, id, accounts));
+      if (state.view === 'players' && playersData) renderPlayers(); else paint();
+    });
+    paint();
+    return b;
+  }
+
+  // ── Views ────────────────────────────────────────────────────────
+  function profileHref(id) { return '#view=player&p=' + encodeURIComponent(id); }
+  function ok(res) { if (!res.ok) { var e = new Error('HTTP ' + res.status); e.status = res.status; throw e; } return res.json(); }
+  function monthYear(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+  }
+  function pctText(w, n) { return n ? Math.round((w / n) * 100) + '%' : '—'; }
+  function record(w, l) { return w + '–' + l; }
+
+  function render() {
+    var v = VIEWS[state.view] || 'games';
+    $('shell').className = 'shell view-' + v;
+    Array.prototype.forEach.call($('views').querySelectorAll('a'), function (a) {
+      var on = a.getAttribute('data-view') === (v === 'player' ? 'players' : v);
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    $('players').hidden = v !== 'players';
+    $('profile').hidden = v !== 'player';
+    $('games-title').hidden = v !== 'player';
+    if (v === 'players') { writeHash(); syncWho(); loadPlayers(); window.scrollTo(0, 0); return; }
+    if (v === 'player') { loadProfile(); window.scrollTo(0, 0); return; }
+    profileIds = null;
+    load();
+  }
+
+  // ── Players view ─────────────────────────────────────────────────
+  var playersData = null, playersSeq = 0;
+  function loadPlayers() {
+    var my = ++playersSeq;
+    if (!playersData) $('pl-note').textContent = 'Loading…';
+    fetch('/api/players' + (state.version ? '?version=' + encodeURIComponent(state.version) : '')).then(ok).then(function (d) {
+      if (my !== playersSeq) return;
+      playersData = d;
+      renderPlayers();
+    }).catch(function (err) {
+      if (my !== playersSeq) return;
+      $('pl-note').textContent = 'Could not load the players (' + err.message + ').';
+    });
+  }
+
+  function renderPlayers() {
+    var people = (playersData.people || []).slice();
+    // The pinned player first, then most recently played.
+    people.sort(function (a, b) { return (pinned && b.id === pinned.id ? 1 : 0) - (pinned && a.id === pinned.id ? 1 : 0); });
+    var accounts = people.reduce(function (n, p) { return n + p.accounts.length; }, 0);
+    $('pl-note').textContent = people.length + (people.length === 1 ? ' tracked person' : ' tracked people') +
+      (accounts > people.length ? ' on ' + accounts + ' accounts' : '') +
+      '. Each card shows their median military in each age and, beside it, the usual time they reached the next age.' +
+      ' Open one for their profile; pin one and Games opens on their games.';
+    var list = $('pl-list');
+    list.textContent = '';
+    people.forEach(function (p) { list.appendChild(playerCard(p)); });
+  }
+
+  // Their typical age, per window: median military and the median time they reached the next age.
+  function fingerprint(t) {
+    var g = el('div', 'fp');
+    WINDOW_ORDER.forEach(function (w) {
+      var c = t ? t[w] : null;
+      var col = el('div', 'fp-col');
+      col.appendChild(el('span', 'fp-l', AGE[w].replace(' Age', '')));
+      var v = el('span', 'fp-v');
+      if (c && c.combined !== null) xval(v, c.combined); else v.textContent = '—';
+      v.title = c && c.combined !== null ? 'Median military in the ' + AGE[w] + ': ' + fx(c.combined) + 'x' : 'No games in the ' + AGE[w];
+      col.appendChild(v);
+      var tm = el('span', 'fp-t', c && c.ageUp !== null ? mmss(c.ageUp) : '—');
+      tm.title = c && c.ageUp !== null ? 'Median time they reached ' + NEXT[w] + ': ' + mmss(c.ageUp) : 'Rarely or never reached ' + NEXT[w];
+      col.appendChild(tm);
+      g.appendChild(col);
+    });
+    return g;
+  }
+
+  function backfillLine(b, full) {
+    if (!b) return null;
+    var done = b.fetched, gone = b.unavailable + b.parked;
+    if (!full && b.waiting === 0) return null;
+    var box = el('div', 'bf' + (b.waiting ? ' going' : ''));
+    var t = el('p');
+    if (b.waiting) {
+      t.appendChild(document.createTextNode('Backfill: '));
+      t.appendChild(el('span', 'mono', String(done)));
+      t.appendChild(document.createTextNode(' of '));
+      t.appendChild(el('span', 'mono', String(b.queued)));
+      t.appendChild(document.createTextNode(' fetched, ' + b.waiting + ' waiting' + (gone ? ', ' + gone + ' unavailable' : '') + '.'));
+    } else {
+      t.appendChild(document.createTextNode('Backfill of ' + b.months + ' months done: '));
+      t.appendChild(el('span', 'mono', String(done)));
+      t.appendChild(document.createTextNode(' games fetched' + (gone ? ', ' + gone + " that aoe4world couldn't give" : '') + '.'));
+    }
+    box.appendChild(t);
+    if (b.waiting && b.queued) {
+      var track = el('span', 'bf-track'), fill = el('span', 'bf-fill');
+      fill.style.width = Math.round(((done + gone) / b.queued) * 100) + '%';
+      track.appendChild(fill);
+      track.setAttribute('role', 'img');
+      track.setAttribute('aria-label', Math.round(((done + gone) / b.queued) * 100) + '% through the backfill');
+      box.appendChild(track);
+    }
+    return box;
+  }
+
+  function playerCard(p) {
+    var on = !!(pinned && pinned.id === p.id);
+    var li = el('li', 'pcard' + (on ? ' pinned' : ''));
+    var a = el('a', 'pc-main');
+    a.href = profileHref(p.id);
+    var top = el('div', 'pc-top');
+    top.appendChild(el('span', 'pc-name', p.person));
+    if (p.group) top.appendChild(el('span', 'tag', p.group));
+    if (!p.following) { var pz = el('span', 'tag quiet', 'paused'); pz.title = 'The harvest no longer looks for their new games'; top.appendChild(pz); }
+    top.appendChild(el('span', 'pc-last', p.lastGame ? day(p.lastGame) : ''));
+    a.appendChild(top);
+
+    var sub = el('p', 'pc-sub');
+    if (p.games) {
+      sub.appendChild(el('span', 'mono', record(p.wins, p.losses)));
+      sub.appendChild(document.createTextNode(' · ' + plural(p.games, 'game')));
+    } else {
+      sub.appendChild(document.createTextNode('No analysed games yet'));
+    }
+    var alts = p.accounts.filter(function (x) { return x.name && x.name !== p.person; }).map(function (x) { return x.name; });
+    if (p.accounts.length > 1) sub.appendChild(document.createTextNode(' · ' + p.accounts.length + ' accounts'));
+    else if (alts.length) sub.appendChild(document.createTextNode(' · ' + alts[0]));
+    a.appendChild(sub);
+
+    if (p.games) a.appendChild(fingerprint(p.typical));
+    if (p.civs && p.civs.length) {
+      a.appendChild(el('p', 'pc-civs', p.civs.slice(0, 3).map(function (c) { return civName(c.civ) + ' ' + c.games; }).join(' · ')));
+    }
+    var bf = backfillLine(p.backfill, false);
+    if (bf) a.appendChild(bf);
+    li.appendChild(a);
+    li.appendChild(pinButton(p.person, p.id, p.accounts, true));
+    return li;
+  }
+
+  var findSeq = 0;
+  function findPlayers(q) {
+    var box = $('pl-found'), my = ++findSeq;
+    if (q.length < 2) { box.hidden = true; box.textContent = ''; return; }
+    fetch('/api/players?q=' + encodeURIComponent(q) + (state.version ? '&version=' + encodeURIComponent(state.version) : '')).then(ok).then(function (d) {
+      if (my !== findSeq) return;
+      box.textContent = '';
+      box.hidden = false;
+      var m = d.matches || [];
+      if (!m.length) { box.appendChild(el('li', 'none', 'Nobody by that name in the analysed games.')); return; }
+      m.forEach(function (x) {
+        var li = el('li'), a = el('a');
+        a.href = profileHref(x.profileId);
+        a.appendChild(el('span', 'nm', x.name || String(x.profileId)));
+        a.appendChild(el('span', x.group ? 'tag' : 'tag-none', x.group || ''));
+        a.appendChild(el('span', 'mono n', plural(x.games, 'game')));
+        a.appendChild(el('span', 'mono d', day(x.lastGame)));
+        li.appendChild(a);
+        box.appendChild(li);
+      });
+    }).catch(function () { if (my === findSeq) { box.hidden = false; box.textContent = ''; box.appendChild(el('li', 'none', "The search didn't work. Try again in a moment.")); } });
+  }
+
+  // ── Profile ──────────────────────────────────────────────────────
+  var profileSeq = 0, profileData = null;
+  function loadProfile() {
+    var my = ++profileSeq, id = state.p, box = $('profile');
+    if (!profileData || String(profileData.id) !== id) {
+      profileIds = null;
+      box.textContent = '';
+      box.appendChild(el('p', 'prof-wait', 'Loading the profile…'));
+    }
+    fetch('/api/player?id=' + encodeURIComponent(id) + (state.version ? '&version=' + encodeURIComponent(state.version) : '')).then(ok).then(function (d) {
+      if (my !== profileSeq) return;
+      profileData = d;
+      profileIds = (d.accounts || []).map(function (a) { return Number(a.profileId); });
+      // Keep a pin's accounts current (an alt added later).
+      if (pinned && profileIds.indexOf(pinned.id) !== -1 && d.person) {
+        pinned = pinFrom(d.person, pinned.id, d.accounts);
+        try { localStorage.setItem(PIN_KEY, JSON.stringify(pinned)); } catch (e) { /* this visit only */ }
+        renderChip();
+      }
+      renderProfile(d);
+      load();
+    }).catch(function (err) {
+      if (my !== profileSeq) return;
+      profileData = null; profileIds = [Number(id)];
+      box.textContent = '';
+      box.appendChild(el('p', 'prof-wait', err.status === 404
+        ? 'No analysed games for this player yet. If a backfill is running, check back after the next harvest.'
+        : 'Could not load the profile (' + err.message + ').'));
+      load();
+    });
+  }
+
+  function strip(sp, scale) {
+    var s = el('span', 'strip');
+    s.style.setProperty('--scale', String(scale));
+    if (!sp || sp.median === null) return s;
+    var pos = function (v) { return Math.min(100, Math.max(0, (v / scale) * 100)); };
+    function band(cls, lo, hi) {
+      var b = el('span', cls);
+      b.style.left = pos(lo) + '%';
+      b.style.width = Math.max(0.6, pos(hi) - pos(lo)) + '%';
+      s.appendChild(b);
+    }
+    band('s-out', sp.p10, sp.p90);
+    band('s-mid', sp.p25, sp.p75);
+    var m = el('span', 's-med'); m.style.left = pos(sp.median) + '%'; s.appendChild(m);
+    s.setAttribute('role', 'img');
+    s.setAttribute('aria-label', 'Middle half ' + fx(sp.p25) + 'x to ' + fx(sp.p75) + 'x; most games ' + fx(sp.p10) + 'x to ' + fx(sp.p90) + 'x; median ' + fx(sp.median) + 'x');
+    return s;
+  }
+
+  function mixTable(ws) {
+    var t = el('table', 'mix');
+    [['units', 'Units', 'Units'], ['production', 'Production', 'Prod.'], ['defense', 'Defense', 'Def.']].forEach(function (k) {
+      var row = el('tr');
+      var th = el('th');
+      th.appendChild(el('span', 'l-long', k[1]));
+      th.appendChild(el('span', 'l-short', k[2]));
+      row.appendChild(th);
+      row.appendChild(xval(el('td'), ws[k[0]]));
+      t.appendChild(row);
+    });
+    return t;
+  }
+
+  // The profile's age columns follow the age tab.
+  function markNow() {
+    Array.prototype.forEach.call($('profile').querySelectorAll('[data-w]'), function (n) {
+      n.classList.toggle('now', n.getAttribute('data-w') === state.window);
+    });
+  }
+
+  function renderProfile(d) {
+    var box = $('profile');
+    box.textContent = '';
+    $('games-title').textContent = (d.person || d.name || 'Their') + (d.person || d.name ? "'s games" : ' games');
+
+    // Who
+    var head = el('div', 'ph');
+    var main = el('div', 'ph-main');
+    var crumb = el('p', 'ph-crumb'); var back = el('a', null, 'Players'); back.href = '#view=players';
+    crumb.appendChild(back); crumb.appendChild(document.createTextNode(' /'));
+    main.appendChild(crumb);
+    var h = el('h2', 'ph-name');
+    h.appendChild(el('span', 'nm', d.person || d.name || String(d.id)));
+    if (d.group) h.appendChild(el('span', 'tag', d.group));
+    if (d.tracked && !d.following) h.appendChild(el('span', 'tag quiet', 'paused'));
+    if (!d.tracked) h.appendChild(el('span', 'tag quiet', 'not tracked'));
+    main.appendChild(h);
+    var named = (d.accounts || []).map(function (a) { return a.name; }).filter(Boolean);
+    if (d.accounts.length > 1) main.appendChild(el('p', 'ph-acc', 'Plays as ' + named.slice(0, -1).join(', ') + ' and ' + named[named.length - 1] + '.'));
+    else if (named[0] && named[0] !== d.person) main.appendChild(el('p', 'ph-acc', 'On aoe4world as ' + named[0] + '.'));
+    var rec = el('p', 'ph-rec');
+    if (d.games) {
+      rec.appendChild(el('span', 'mono', record(d.wins, d.losses)));
+      rec.appendChild(document.createTextNode(' · ' + pctText(d.wins, d.games) + ' won · ' + plural(d.games, 'game') + ' analysed · ' +
+        (monthYear(d.firstGame) === monthYear(d.lastGame) ? monthYear(d.lastGame) : monthYear(d.firstGame) + ' to ' + monthYear(d.lastGame))));
+    } else rec.textContent = 'No analysed games yet.';
+    main.appendChild(rec);
+    head.appendChild(main);
+    var act = el('div', 'ph-act');
+    if (d.games || d.tracked) act.appendChild(pinButton(d.person || d.name || String(d.id), d.accounts[0] ? d.accounts[0].profileId : d.id, d.accounts, false));
+    (d.accounts || []).slice(0, 3).forEach(function (a, i) {
+      var l = el('a', 'ext', d.accounts.length > 1 ? (a.name || a.profileId) + ' on aoe4world' : 'aoe4world');
+      l.href = 'https://aoe4world.com/players/' + encodeURIComponent(a.profileId);
+      l.target = '_blank'; l.rel = 'noopener noreferrer';
+      act.appendChild(l);
+    });
+    head.appendChild(act);
+    box.appendChild(head);
+    var bf = backfillLine(d.backfill, true);
+    if (bf) box.appendChild(bf);
+    if (!d.games) return;
+
+    // How they invest, per age: the same three columns as the board.
+    var sec = el('section', 'psec');
+    sec.appendChild(el('h3', 'psec-t', 'How they invest'));
+    var grid = el('div', 'pgrid');
+    var heads = el('div', 'prow3 pheads');
+    heads.appendChild(el('span'));
+    WINDOW_ORDER.forEach(function (w) {
+      var hs = el('span', state.window === w ? 'now' : '', AGE[w].replace(' Age', ''));
+      hs.appendChild(el('span', 'l-long', ' → ' + NEXT[w]));
+      hs.setAttribute('data-w', w);
+      heads.appendChild(hs);
+    });
+    grid.appendChild(heads);
+    function lane(title, note, cell) {
+      var l = el('div', 'plane');
+      var row = el('div', 'prow3');
+      var lab = el('div', 'plabel');
+      lab.appendChild(el('span', 't', title));
+      lab.appendChild(el('span', 's', note));
+      row.appendChild(lab);
+      WINDOW_ORDER.forEach(function (w) { row.appendChild(cell(w, d.windows[w])); });
+      l.appendChild(row);
+      grid.appendChild(l);
+    }
+    lane('Military', 'median, in age-ups', function (w, ws) {
+      var c = el('div', 'pcell' + (state.window === w ? ' now' : ''));
+      c.setAttribute('data-w', w);
+      if (!ws || !ws.n) { c.appendChild(el('p', 'gone', 'Never reached the ' + AGE[w] + '.')); return c; }
+      var top = el('div', 'pc-top2');
+      top.appendChild(xval(el('span', 'ratio big'), ws.combined.median));
+      top.appendChild(el('span', 'pc-n', plural(ws.n, 'game')));
+      c.appendChild(top);
+      c.appendChild(strip(ws.combined, (d.scales && d.scales[w]) || 1));
+      var mid = el('p', 'pc-mid');
+      mid.appendChild(document.createTextNode('middle half '));
+      mid.appendChild(el('span', 'mono', fx(ws.combined.p25) + '–' + fx(ws.combined.p75) + 'x'));
+      c.appendChild(mid);
+      c.appendChild(mixTable(ws));
+      return c;
+    });
+    lane('Next age-up', 'median time', function (w, ws) {
+      var c = el('div', 'pcell' + (state.window === w ? ' now' : ''));
+      c.setAttribute('data-w', w);
+      if (!ws || !ws.n) { c.appendChild(el('p', 'gone', '—')); return c; }
+      var top = el('div', 'pc-top2');
+      top.appendChild(el('span', 'ratio big', ws.reached ? mmss(ws.ageUp.median) : '—'));
+      top.appendChild(el('span', 'pc-n', NEXT[w]));
+      c.appendChild(top);
+      if (ws.reached > 1) {
+        var mid = el('p', 'pc-mid');
+        mid.appendChild(document.createTextNode('middle half '));
+        mid.appendChild(el('span', 'mono', mmss(ws.ageUp.p25) + '–' + mmss(ws.ageUp.p75)));
+        c.appendChild(mid);
+      }
+      c.appendChild(el('p', 'pc-mid', (ws.reached === ws.n ? 'every game' : ws.reached + ' of ' + ws.n + ' games') + ' reached ' + NEXT[w]));
+      return c;
+    });
+    sec.appendChild(grid);
+    box.appendChild(sec);
+
+    // By civ, and their record against civs and on maps.
+    var lower = el('div', 'plower');
+    var civSec = el('section', 'psec');
+    civSec.appendChild(el('h3', 'psec-t', 'By civ'));
+    var t = el('table', 'civt');
+    var cg = el('colgroup');
+    ['c-civ', 'c-n', 'c-n', 'c-a', 'c-a', 'c-a'].forEach(function (c) { cg.appendChild(el('col', c)); });
+    t.appendChild(cg);
+    var th = el('thead'), hr = el('tr');
+    ['Civ', 'Games', 'Won', 'Dark', 'Feudal', 'Castle'].forEach(function (x, i) { var c = el('th', i ? 'r' : '', x); hr.appendChild(c); });
+    th.appendChild(hr); t.appendChild(th);
+    var tb = el('tbody');
+    d.civs.forEach(function (c) {
+      var row = el('tr');
+      row.appendChild(el('th', null, civName(c.civ)));
+      row.appendChild(el('td', null, String(c.games)));
+      row.appendChild(el('td', null, pctText(c.wins, c.games)));
+      WINDOW_ORDER.forEach(function (w) {
+        var ws = c.windows[w], td = el('td', 'a');
+        if (!ws || !ws.n || ws.combined === null) { td.textContent = '—'; td.classList.add('zero'); }
+        else {
+          td.appendChild(xval(el('span', 'v'), ws.combined));
+          var tm = el('span', 't', ws.ageUp !== null && ws.reached ? mmss(ws.ageUp) : '—');
+          tm.title = ws.reached ? 'Median ' + NEXT[w] + ' time, ' + ws.reached + ' of ' + ws.n + ' got there' : 'Never reached ' + NEXT[w];
+          td.appendChild(tm);
+        }
+        row.appendChild(td);
+      });
+      tb.appendChild(row);
+    });
+    t.appendChild(tb);
+    civSec.appendChild(t);
+    civSec.appendChild(el('p', 'psec-n', 'Each age shows their median military in age-ups and, below it, the median time they reached the next age.'));
+    lower.appendChild(civSec);
+
+    var recSec = el('section', 'psec precs');
+    function recTable(title, rows, label) {
+      var wrap = el('div', 'prec');
+      wrap.appendChild(el('h3', 'psec-t', title));
+      var tt = el('table', 'rect');
+      var cg2 = el('colgroup'); ['c-l', 'c-r', 'c-n'].forEach(function (c) { cg2.appendChild(el('col', c)); }); tt.appendChild(cg2);
+      var bd = el('tbody');
+      rows.forEach(function (x) {
+        var row = el('tr');
+        row.appendChild(el('th', null, label(x)));
+        row.appendChild(el('td', null, record(x.wins, x.games - x.wins)));
+        row.appendChild(el('td', null, pctText(x.wins, x.games)));
+        bd.appendChild(row);
+      });
+      tt.appendChild(bd);
+      wrap.appendChild(tt);
+      return wrap;
+    }
+    recSec.appendChild(recTable('Against', d.versus.slice(0, 8), function (x) { return civName(x.civ); }));
+    recSec.appendChild(recTable('Maps', d.maps.slice(0, 6), function (x) { return x.map; }));
+    lower.appendChild(recSec);
+    box.appendChild(lower);
+  }
+
   // ── Data ─────────────────────────────────────────────────────────
   var seq = 0;
   function load() {
     writeHash(); syncControls();
     var my = ++seq;
-    var p = new URLSearchParams({ window: state.window, group: state.group, sort: state.sort, dir: state.dir, limit: '300' });
+    var only = listPlayers();
+    var p = new URLSearchParams({ window: state.window, group: only ? 'all' : state.group, sort: state.sort, dir: state.dir, limit: '300' });
     if (state.version) p.set('version', state.version);
+    if (only) p.set('player', only.join(','));
     if (state.civ) p.set('civ', state.civ);
     if (state.vs) p.set('vs', state.vs);
-    if (state.q) p.set('q', state.q);
+    if (state.q && !only) p.set('q', state.q);
     if (state.reached) p.set('reached', '1');
     p.set('hm', state.hm);
     WINDOW_ORDER.forEach(function (w) { if (ranges[w]) p.set('range_' + w, rangeParam(ranges[w])); });
     $('status').textContent = 'Loading…';
+    syncWho();
+    if (state.view === 'player') markNow();
     fetch('/api/rows?' + p.toString()).then(function (res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
@@ -654,8 +1189,31 @@
       fillSelect($('group'), m.groups || [], function (g) { return g.charAt(0).toUpperCase() + g.slice(1); });
       var upd = m.updated ? new Date(m.updated).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'never';
       $('meta').textContent = (m.analysedGames || 0) + ' games analysed, metric ' + (m.version || 'none') + ', updated ' + upd + '.';
-      load();
-    }).catch(function () { load(); });
+      render();
+    }).catch(function () { render(); });
+
+    // Links between views change the address; the back button walks them.
+    window.addEventListener('hashchange', function () { readHash(); render(); });
+    window.addEventListener('storage', function (e) {
+      if (e.key !== PIN_KEY && e.key !== ALL_KEY) return;
+      pinned = readPin(); preferAll = readFlag(ALL_KEY);
+      renderChip();
+      if (state.view === '') load(); else if (state.view === 'players' && playersData) renderPlayers();
+    });
+    Array.prototype.forEach.call($('who-switch').querySelectorAll('button'), function (b) {
+      b.addEventListener('click', function () {
+        preferAll = b.getAttribute('data-who') === 'all';
+        writeFlag(ALL_KEY, preferAll);
+        load();
+      });
+    });
+    $('who-switch').querySelector('.pin-ico').appendChild(pinIcon(true));
+    var ft;
+    $('find').addEventListener('input', function () {
+      clearTimeout(ft);
+      ft = setTimeout(function () { findPlayers($('find').value.trim()); }, 300);
+    });
+    renderChip();
 
     $('tabs').addEventListener('click', function (e) {
       var t = e.target && e.target.closest ? e.target.closest('button') : null;
@@ -687,7 +1245,7 @@
 
     // Wide screens: the arrow keys move through the list; widening the window picks a game.
     document.addEventListener('keydown', function (e) {
-      if (!wide.matches || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (!wide.matches || e.altKey || e.ctrlKey || e.metaKey || state.view === 'players') return;
       var tag = e.target && e.target.tagName;
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); step(e.key === 'ArrowDown' ? 1 : -1); }
