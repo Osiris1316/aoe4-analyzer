@@ -22,7 +22,9 @@ The game list's filters live in the address (`?window=feudal&civ=french&r_dark=c
 
 **Pinning** works like following in the league manager: pin one player and this browser remembers them (localStorage only; nothing is stored on the server).
 
-**The age path** works like an opening tree. In any age you can narrow the list to a range of one ratio, by tapping histogram bars or typing the bounds. Later ages then show only the player-games whose earlier rows fall inside every range on the path.
+**Scoping both sides.** Civ and Versus each take several civs (the row's player and their opponent), so "Vikings, Chinese or Ottomans against HRE or Mongols" is one list. Sort can follow either side's ratios or age-up time.
+
+**The age path** works like an opening tree, for both sides. In any age you can narrow the list to a range of one ratio for the player, the opponent, or both (the Player / Opponent switch), by tapping histogram bars or typing the bounds. Later ages then show only the games whose earlier rows fall inside every range on the path. The histogram shows one side's spread with the other side's range in that age applied but not its own, like cross-filtering in a dashboard. In the address: `r_<age>` is the player's range, `o_<age>` the opponent's, `hs=opp` shows the opponent's histogram.
 
 **Icons**: civ flags come from the league manager. Unit, building, technology and landmark icons, and the names shown beside them, come from the [AoE4 World data repo](https://github.com/aoe4world/data) at the commit the metric is pinned to. `scripts/icons.ts` copies the icon of everything the metric can count and of every age-up into `web/public/icons` and writes `web/src/icons.generated.ts`. Run it again from the repo root after `refresh-game-data` moves the commit or `categories.json` gains ids:
 

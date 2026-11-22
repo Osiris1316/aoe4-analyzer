@@ -48,7 +48,7 @@ export function legacyPath(hash: string): string | null {
     // Old profile links carried the game list's filters: open their games when they did.
     return [...h.keys()].length ? paths.playerGames(p, h) : paths.player(p);
   }
-  const known = ['window', 'group', 'civ', 'vs', 'q', 'reached', 'vod', 'sort', 'dir', 'hm', 'g', 'version', 'r_dark', 'r_feudal', 'r_castle'];
+  const known = ['window', 'group', 'civ', 'vs', 'q', 'reached', 'vod', 'hs', 'o_dark', 'o_feudal', 'o_castle', 'sort', 'dir', 'hm', 'g', 'version', 'r_dark', 'r_feudal', 'r_castle'];
   if (![...h.keys()].some((k) => known.includes(k))) return null;
   return paths.games(h);
 }

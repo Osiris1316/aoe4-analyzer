@@ -11,18 +11,18 @@ import { WIDE, useMedia } from '../../lib/useMedia';
 import { Board } from './Board';
 import { AgeTabs, Filters } from './Filters';
 import { GameCard } from './GameCard';
-import { AgePath, RangePanel, earlier } from './RangePanel';
+import { AgePath, RangePanel, hasPath } from './RangePanel';
 import { rowsQuery, useListState, type ListState } from './listState';
 import { rowKey } from './rows';
 import s from './GameList.module.css';
 
 function statusText(st: ListState, data: RowsResponse, shown: number, wide: boolean): string {
   const total = data.total || 0, inPath = data.inPath || 0;
-  const pathOn = earlier(st.window).some((w) => st.ranges[w]);
-  const own = st.ranges[st.window];
+  const pathOn = hasPath(st);
+  const own = st.ranges[st.window] || st.oranges[st.window];
   if (!inPath) return pathOn ? 'None of the player-games in your path reached the ' + AGE[st.window as Win] + '.' : 'No games match these filters yet.';
   const parts = [pathOn ? plural(inPath, 'player-game') + ' in your path reached the ' + AGE[st.window as Win] : plural(inPath, 'player-game')];
-  if (own) parts.push(total + ' in the chosen range');
+  if (own) parts.push(total + ' in this age\'s ' + (st.ranges[st.window] && st.oranges[st.window] ? 'ranges' : 'range'));
   let t = parts.join(', ') + '.';
   if (shown < total) t += ' Showing the first ' + shown + '.';
   return t + (shown ? (wide ? ' Pick one to see the whole game; the arrow keys move through the list.' : ' Tap one to open the whole game.') : '');
