@@ -128,6 +128,7 @@ export const ITEMS: Readonly<Record<string, { icon: string | null; name: string 
   "building:tower-house": { icon: "buildings/tower-house-1.png", name: "Tower House" },
   "building:tower-of-skye": { icon: "buildings/tower-of-skye-2.png", name: "Tower of Skye" },
   "building:tower-of-victory": { icon: "buildings/tower-of-victory-1.png", name: "Tower of Victory" },
+  "building:town-center": { icon: "buildings/town-center-1.png", name: "Town Center" },
   "building:tughlaqabad-fort": { icon: "buildings/tughlaqabad-fort-2.png", name: "Tughlaqabad Fort" },
   "building:twin-minaret-medrese": { icon: "buildings/twin-minaret-medrese-1.png", name: "Twin Minaret Medrese" },
   "building:valdemar-castle": { icon: "buildings/valdemar-castle-2.png", name: "Valdemar Castle" },

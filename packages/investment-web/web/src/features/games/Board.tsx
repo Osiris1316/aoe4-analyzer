@@ -6,7 +6,7 @@ import { forwardRef, useEffect, useRef, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { useJson, withVersion } from '../../api/client';
 import type { GameResponse, Row } from '../../api/types';
-import { AGE, AGE_SHORT, BUCKETS, FLAG_TEXT, NEXT, WINDOWS, ageUp, item, type Win } from '../../lib/game';
+import { AGE, AGE_SHORT, BUCKETS, FLAG_TEXT, NEXT, TOWN_CENTER, WINDOWS, ageUp, item, type Win } from '../../lib/game';
 import { day, fx, mmss, res } from '../../lib/format';
 import type { Pin } from '../../lib/pin';
 import { vodAt, vodUrl } from '../../lib/vod';
@@ -15,7 +15,7 @@ import { Civ, ItemIcon, Ratio } from '../../kit/marks';
 import { VodIcon } from '../../kit/VodIcon';
 import { aoe4worldGame, paths } from '../../app/paths';
 import { PlayerName } from './GameCard';
-import { counts, side } from './rows';
+import { counts, side, tcText } from './rows';
 import s from './Board.module.css';
 
 export interface Player {
@@ -70,6 +70,8 @@ export function GameHead({ P, actions, level = 2 }: { P: Sides; actions?: ReactN
  * The Games list scoped to games like this one, seen from the player's side:
  * the same civs on each side, each side's Dark Age military within a quarter of
  * an age-up of this game's, games the player's side won, opened on the Feudal Age.
+ * When the player finished an extra Town Center in the Feudal Age, the games
+ * must have one there too, so a 2TC plan finds other 2TC plans.
  * From there, take chips off or add civs to widen it.
  */
 export function similarSearch(P: Sides): string {
@@ -86,13 +88,18 @@ export function similarSearch(P: Sides): string {
   const a = band(P.me.w.dark), b = band(P.them.w.dark);
   if (a) q.set('r_dark', a);
   if (b) q.set('o_dark', b);
+  if (feudalTc(P)) q.set('t_feudal', '1');
   return paths.games(q);
 }
+
+const feudalTc = (P: Sides) => Number(P.me.w.feudal?.tc_built ?? 0) > 0;
 
 export function SimilarButton({ P }: { P: Sides }) {
   return (
     <Link className={s.btn} to={similarSearch(P)}
-      title={'Games where ' + P.me.name + "'s civ met " + P.them.name + "'s civ with Dark Age military like this game's, and the player won. Opens on the Feudal Age; widen it from there."}>
+      title={'Games where ' + P.me.name + "'s civ met " + P.them.name + "'s civ with Dark Age military like this game's"
+        + (feudalTc(P) ? ', the player finished an extra Town Center in the Feudal Age' : '')
+        + ', and the player won. Opens on the Feudal Age; widen it from there.'}>
       Find games like this
     </Link>
   );
@@ -229,13 +236,23 @@ function PlayerCell({ p, w, cls, scale, now }: { p: Player; w: Win; cls: 'p1' | 
         <tbody>
           <tr className={s.spent}><td colSpan={3}>{res(d.spend)} on military, against {res(d.cost)} for {NEXT[w]}</td></tr>
         </tbody>
+        {d.tc ? (
+          <tbody>
+            <tr className={s.cat}><th colSpan={2}>Economy<span className={s.note}>apart</span></th><td /></tr>
+            <tr>
+              <td className={s.n}>{d.tc}</td>
+              <td title={tcText(d)}><span className={s.itemCell}><ItemIcon item={TOWN_CENTER} size={18} /><span className={s.itemName}>{d.tc === 1 ? 'Town Center' : 'Town Centers'}</span></span></td>
+              <td className={s.at} title={(d.tc === 1 ? 'Done at ' : 'The first done at ') + mmss(d.tcFirst)}>{mmss(d.tcFirst)}</td>
+            </tr>
+          </tbody>
+        ) : null}
       </table>
       {notes.length > 0 && <p className={s.flags}>Note: {notes.join('; ')}.</p>}
     </div>
   );
 }
 
-/** Who invested more in this age, and who aged up first. */
+/** Who invested more in this age, who aged up first, and who added a Town Center. */
 function MeetCell({ me, them, w, now }: { me: Player; them: Player; w: Win; now: boolean }) {
   const a = me.w[w] ? side(me.w[w]!, '') : null, b = them.w[w] ? side(them.w[w]!, '') : null;
   const who = (p: Player, cls: 'p1' | 'p2') => <span className={s.who + ' c-' + cls}>{p.name}</span>;
@@ -255,6 +272,9 @@ function MeetCell({ me, them, w, now }: { me: Player; them: Player; w: Win; now:
     } else if (a.reached || b.reached) {
       lines.push(<>{who(a.reached ? me : them, a.reached ? 'p1' : 'p2')} reached {NEXT[w]}; the other never did.</>);
     } else lines.push(<>Neither reached {NEXT[w]}.</>);
+  }
+  for (const [p, d, cls] of [[me, a, 'p1'], [them, b, 'p2']] as const) {
+    if (d?.tc) lines.push(<>{who(p, cls)} {d.tc === 1 ? 'added a Town Center' : 'added ' + d.tc + ' Town Centers, the first'} at <span className="mono">{mmss(d.tcFirst)}</span>.</>);
   }
   return <div className={s.cell + (now ? ' ' + s.now : '')} data-age={w}>{lines.map((l, i) => <p key={i}>{l}</p>)}</div>;
 }

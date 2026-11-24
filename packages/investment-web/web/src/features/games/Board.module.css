@@ -67,6 +67,7 @@ a.name:hover { text-decoration: underline; text-underline-offset: 3px; }
 .n { text-align: right; font-family: var(--mono); color: var(--fg-2); padding-right: 8px !important; }
 .itemCell { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--fg-2); }
 .itemName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.at { text-align: right; font-family: var(--mono); color: var(--fg-2); }
 .spent td { padding-top: 7px !important; border-top: 1px solid var(--line-soft); color: var(--faint); font-size: var(--text-xs); }
 .flags { margin: 6px 0 0; font-size: var(--text-xs); color: var(--warn); }
 

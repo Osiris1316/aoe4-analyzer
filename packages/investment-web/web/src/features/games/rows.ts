@@ -1,6 +1,6 @@
 // One player's age, read from a result row or from its opponent's opp_* columns.
 import type { Row } from '../../api/types';
-import { parseJson } from '../../lib/format';
+import { mmss, parseJson } from '../../lib/format';
 import type { Bucket } from '../../lib/game';
 
 export interface CountedItem { bucket: Bucket; id: string; n: number; cost: number }
@@ -11,6 +11,8 @@ export interface Side {
   /** Production, units and defense, in resources. */
   spend: number;
   items: CountedItem[]; flags: string[];
+  /** Extra Town Centers completed in this age (null: not measured yet) and when the first one completed. */
+  tc: number | null; tcFirst: number | null;
 }
 
 export function side(r: Row, pre: '' | 'opp_'): Side | null {
@@ -25,6 +27,8 @@ export function side(r: Row, pre: '' | 'opp_'): Side | null {
     spend: num('spend_production') + num('spend_units') + num('spend_defense'),
     items: parseJson<CountedItem[]>(get('items_json') as string | null, []),
     flags: parseJson<string[]>(get('flags_json') as string | null, []),
+    tc: get('tc_built') === null || get('tc_built') === undefined ? null : num('tc_built'),
+    tcFirst: get('tc_first_sec') === null || get('tc_first_sec') === undefined ? null : num('tc_first_sec'),
   };
 }
 
@@ -40,6 +44,12 @@ export function counts(d: Side | null, bucket: Bucket): Map<string, { n: number;
     m.set(i.id, c);
   }
   return m;
+}
+
+/** "1 extra Town Center, done at 7:40", for titles and screen readers. */
+export function tcText(d: Side): string {
+  if (!d.tc) return '';
+  return d.tc + ' extra Town Center' + (d.tc === 1 ? ', done at ' : 's, the first done at ') + mmss(d.tcFirst ?? 0);
 }
 
 export const rowKey = (r: { game_id: number; profile_id: number }) => r.game_id + '.' + r.profile_id;

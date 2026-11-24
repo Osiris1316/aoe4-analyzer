@@ -13,3 +13,7 @@
 
 .item { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; vertical-align: middle; }
 .itemName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Extra Town Centers: icon, then the count from two up */
+.tc { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; }
+.tcN { min-width: 1ch; font-family: var(--mono); font-size: var(--text-xs); font-weight: 600; color: var(--fg-2); }

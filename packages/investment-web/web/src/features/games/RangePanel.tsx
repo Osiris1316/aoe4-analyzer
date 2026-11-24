@@ -3,12 +3,13 @@
 // both, by tapping histogram bars or typing the bounds. Later ages then show
 // only the games whose earlier rows fall inside every range. The histogram
 // shows one side's spread, with the other side's range in this age applied,
-// so you can see where the games you've kept sit.
+// so you can see where the games you've kept sit. Under it, each side's extra
+// Town Centers in that age (none, one or more, two or more) narrow it the same way.
 import { useEffect, useState } from 'react';
 import type { Histogram } from '../../api/types';
 import { AGE, WINDOWS, type Win } from '../../lib/game';
 import { fxr, plural } from '../../lib/format';
-import { isMetric, rangeKey, rangesOf, type ListState, type Metric, type Range, type Side } from './listState';
+import { isMetric, rangeKey, rangesOf, tcKey, tcsOf, type ListState, type Metric, type Range, type Side, type Tc } from './listState';
 import s from './RangePanel.module.css';
 
 const SIDE_NAME: Record<Side, string> = { player: 'player', opp: 'opponent' };
@@ -19,36 +20,60 @@ export function rangeText(r: Range): string {
 }
 export const earlier = (w: Win): Win[] => WINDOWS.slice(0, WINDOWS.indexOf(w));
 
-/** True when any range narrows ages before this one, on either side. */
-export const hasPath = (st: ListState): boolean => earlier(st.window).some((w) => st.ranges[w] || st.oranges[w]);
+const TC_TEXT: Record<Tc, string> = { 0: 'no extra Town Center', 1: '1+ extra Town Center', 2: '2+ extra Town Centers' };
+export const tcText = (t: Tc): string => TC_TEXT[t];
+
+/** True when any range or Town Center count narrows ages before this one, on either side. */
+export const hasPath = (st: ListState): boolean =>
+  earlier(st.window).some((w) => st.ranges[w] || st.oranges[w] || st.tcs[w] !== null || st.otcs[w] !== null);
 
 /**
- * Every range in force except the one the panel is editing: earlier ages on
- * both sides (the path), and this age's range on the other side. Each can be taken off.
+ * Everything in force except what the panel is editing: earlier ages on both
+ * sides (the path), and this age's range and Town Centers on the other side.
+ * Each can be taken off.
  */
 export function AgePath({ state, update }: { state: ListState; update: (p: Partial<ListState>) => void }) {
-  const chips: { w: Win; side: Side; r: Range }[] = [];
+  const chips: { key: string; w: Win; side: Side; text: string; what: string; clear: Partial<ListState> }[] = [];
   for (const w of WINDOWS) {
     if (WINDOWS.indexOf(w) > WINDOWS.indexOf(state.window)) break;
     for (const side of ['player', 'opp'] as const) {
       if (w === state.window && side === state.hs) continue;
       const r = rangesOf(state, side)[w];
-      if (r) chips.push({ w, side, r });
+      if (r) chips.push({ key: w + side + 'r', w, side, text: rangeText(r), what: 'range', clear: { [rangeKey(side)]: { ...rangesOf(state, side), [w]: null } } });
+      const t = tcsOf(state, side)[w];
+      if (t !== null) chips.push({ key: w + side + 't', w, side, text: tcText(t), what: 'Town Center filter', clear: { [tcKey(side)]: { ...tcsOf(state, side), [w]: null } } });
     }
   }
   if (!chips.length) return null;
   return (
     <section className={s.path} aria-label="Ranges in force">
-      <span>{chips.every((c) => c.w !== state.window) ? 'Path:' : 'Ranges:'}</span>
-      {chips.map(({ w, side, r }) => (
-        <span key={w + side} className={s.chip}>
+      <span>{chips.every((c) => c.w !== state.window) ? 'Path:' : chips.every((c) => c.what === 'range') ? 'Ranges:' : 'Filters:'}</span>
+      {chips.map(({ key, w, side, text, what, clear }) => (
+        <span key={key} className={s.chip}>
           <span className={s.dot + ' ' + s[side]} aria-hidden="true" />
-          <span><b>{AGE[w]}</b> {SIDE_NAME[side]}: {rangeText(r)}</span>
-          <button type="button" className={s.x} aria-label={'Remove the ' + SIDE_NAME[side] + "'s " + AGE[w] + ' range'}
-            onClick={() => update({ [rangeKey(side)]: { ...rangesOf(state, side), [w]: null } })}>×</button>
+          <span><b>{AGE[w]}</b> {SIDE_NAME[side]}: {text}</span>
+          <button type="button" className={s.x} aria-label={'Remove the ' + SIDE_NAME[side] + "'s " + AGE[w] + ' ' + what}
+            onClick={() => update(clear)}>×</button>
         </span>
       ))}
     </section>
+  );
+}
+
+/** This age's extra Town Centers for one side: any, none, one or more, two or more. */
+function TcPick({ state, update, side }: { state: ListState; update: (p: Partial<ListState>) => void; side: Side }) {
+  const cur = tcsOf(state, side)[state.window];
+  const set = (t: Tc | null) => update({ [tcKey(side)]: { ...tcsOf(state, side), [state.window]: t } });
+  const opts: [Tc | null, string][] = [[null, 'Any'], [0, 'None'], [1, '1+'], [2, '2+']];
+  return (
+    <div className={s.tcRow}>
+      <span>Extra Town Centers in the {AGE[state.window]}</span>
+      <span className={s.sides} role="group" aria-label={'Extra Town Centers the ' + SIDE_NAME[side] + ' finished in the ' + AGE[state.window]}>
+        {opts.map(([t, label]) => (
+          <button key={label} type="button" aria-pressed={cur === t} onClick={() => set(t)}>{label}</button>
+        ))}
+      </span>
+    </div>
   );
 }
 
@@ -115,7 +140,7 @@ export function RangePanel({ state, update, hist }: { state: ListState; update: 
           {(['player', 'opp'] as const).map((sd) => (
             <button key={sd} type="button" aria-pressed={side === sd} onClick={() => update({ hs: sd })}>
               <span className={s.dot + ' ' + s[sd]} aria-hidden="true" />{sd === 'opp' ? 'Opponent' : 'Player'}
-              {rangesOf(state, sd)[state.window] && <span className={s.set} aria-label="(has a range)">•</span>}
+              {(rangesOf(state, sd)[state.window] || tcsOf(state, sd)[state.window] !== null) && <span className={s.set} aria-label="(has a filter)">•</span>}
             </button>
           ))}
         </span>
@@ -139,6 +164,7 @@ export function RangePanel({ state, update, hist }: { state: ListState; update: 
         <button type="button" onClick={() => setOwn(null)}>Clear</button>
       </div>
       {msg && <p className={s.msg} role="status">{msg}</p>}
+      <TcPick state={state} update={update} side={side} />
     </section>
   );
 }

@@ -1,7 +1,7 @@
 // The small marks every page uses: a ratio with its x, a civ's flag, a counted
 // thing's icon, and a civ or item with its name.
 import type { ReactNode } from 'react';
-import { civName, flagUrl, type Item } from '../lib/game';
+import { TOWN_CENTER, civName, flagUrl, type Item } from '../lib/game';
 import { fx } from '../lib/format';
 import s from './marks.module.css';
 
@@ -31,6 +31,21 @@ export function ItemIcon({ item, size = 20, title }: { item: Item; size?: number
   return (
     <span className={s.tile} style={{ width: size, height: size }} title={title ?? item.name}>
       {item.icon ? <img src={item.icon} alt="" width={size} height={size} loading="lazy" decoding="async" /> : null}
+    </span>
+  );
+}
+
+/**
+ * Extra Town Centers in one age: the Town Center icon, with the count beside it
+ * from two up (its place is kept at one, so icons line up down a list).
+ * Nothing when there were none or they weren't measured.
+ */
+export function TcMark({ n, title, size = 14 }: { n: number | null | undefined; title: string; size?: number }) {
+  if (!n) return null;
+  return (
+    <span className={s.tc} title={title} aria-label={title}>
+      <ItemIcon item={TOWN_CENTER} size={size} title={title} />
+      <span className={s.tcN}>{n > 1 ? n : ''}</span>
     </span>
   );
 }

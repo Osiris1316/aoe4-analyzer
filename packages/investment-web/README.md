@@ -26,6 +26,8 @@ The game list's filters live in the address (`?window=feudal&civ=french&r_dark=c
 
 **The age path** works like an opening tree, for both sides. In any age you can narrow the list to a range of one ratio for the player, the opponent, or both (the Player / Opponent switch), by tapping histogram bars or typing the bounds. Later ages then show only the games whose earlier rows fall inside every range on the path. The histogram shows one side's spread with the other side's range in that age applied but not its own, like cross-filtering in a dashboard. In the address: `r_<age>` is the player's range, `o_<age>` the opponent's, `hs=opp` shows the opponent's histogram.
 
+**Extra Town Centers** (the first economy measure) narrow the path the same way: under the histogram, pick Any, None, 1+ or 2+ for the chosen side in that age. In the address: `t_<age>` for the player, `ot_<age>` for the opponent (0 none, 1 one or more, 2 two or more). Cards mark a side that finished an extra Town Center in that age with the Town Center icon (and the count from two up); the game page lists them under Economy, apart from the military, with the first one's time. "Find games like this" asks for a Feudal Age Town Center too when the player finished one. Games analysed before migration 005 have no count and never match a Town Center filter until they're rerun.
+
 **Icons**: civ flags come from the league manager. Unit, building, technology and landmark icons, and the names shown beside them, come from the [AoE4 World data repo](https://github.com/aoe4world/data) at the commit the metric is pinned to. `scripts/icons.ts` copies the icon of everything the metric can count and of every age-up into `web/public/icons` and writes `web/src/icons.generated.ts`. Run it again from the repo root after `refresh-game-data` moves the commit or `categories.json` gains ids:
 
 ```
@@ -73,7 +75,7 @@ From the repo root:
 npx wrangler deploy --config packages/investment-web/wrangler.jsonc
 ```
 
-Before the first deploy that uses it, apply migration 004 to v2 (`npx tsx scripts/migrate-v2.ts`, then `--apply`) and fill the summary once (`npx tsx scripts/analyze-investment.ts --summary`). Wrangler builds the app first (`pnpm --filter @aoe4analyzer/investment-web build`: a type check, then Vite), so this one command is still the whole deploy. After pulling changes to this package, run `pnpm install` once.
+Migration 005 (the Town Center columns) must be applied to v2 before deploying a Worker that reads them; until then every list request fails. Before the first deploy that uses it, apply migration 004 to v2 (`npx tsx scripts/migrate-v2.ts`, then `--apply`) and fill the summary once (`npx tsx scripts/analyze-investment.ts --summary`). Wrangler builds the app first (`pnpm --filter @aoe4analyzer/investment-web build`: a type check, then Vite), so this one command is still the whole deploy. After pulling changes to this package, run `pnpm install` once.
 
 ## Local development
 

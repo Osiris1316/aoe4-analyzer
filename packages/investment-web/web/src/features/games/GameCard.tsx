@@ -1,7 +1,8 @@
 // A card is one player's age with their opponent's same age beside it: two
-// aligned rows (ratio, name, bar, age-up time). On wide screens a press picks
-// the game for the board beside the list; on phones the card links to the
-// game's own page, open at this age.
+// aligned rows (ratio, name, bar, age-up time). A Town Center icon at the end
+// of a name marks extra Town Centers finished in this age. On wide screens a
+// press picks the game for the board beside the list; on phones the card links
+// to the game's own page, open at this age.
 import { forwardRef, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { Row } from '../../api/types';
@@ -10,11 +11,11 @@ import { day, mmss } from '../../lib/format';
 import { isPinnedId, type Pin } from '../../lib/pin';
 import { vodUrl } from '../../lib/vod';
 import { Bar } from '../../kit/Bar';
-import { Civ, Ratio } from '../../kit/marks';
+import { Civ, Ratio, TcMark } from '../../kit/marks';
 import { PinIcon } from '../../kit/Pin';
 import { VodIcon } from '../../kit/VodIcon';
 import { paths } from '../../app/paths';
-import { names, side, type Side } from './rows';
+import { names, side, tcText, type Side } from './rows';
 import s from './GameCard.module.css';
 
 /** A name, with a small pin before it when it's the pinned player and the list isn't already only theirs. */
@@ -31,7 +32,7 @@ function PlayerRow({ side: d, name, cls, scale, win }: { side: Side | null; name
   return (
     <div className={s.prow + ' ' + s[cls] + (d ? '' : ' ' + s.none)}>
       <span className={s.ratio}>{d ? <Ratio v={d.combined} /> : '—'}</span>
-      <span className={s.pname}>{name}</span>
+      <span className={s.pname}><span className={s.pnameText}>{name}</span>{d && <TcMark n={d.tc} title={tcText(d)} />}</span>
       {d ? <Bar d={d} scale={scale} side={cls} /> : <span className={s.missing}>did not reach the {AGE[win]}</span>}
       <span className={s.time} title={d && d.reached ? 'Reached ' + NEXT[win] + ' at ' + mmss(d.end) : 'Did not reach ' + NEXT[win]}>
         {d && d.reached ? mmss(d.end) : '—'}

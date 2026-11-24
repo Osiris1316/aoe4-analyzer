@@ -63,6 +63,12 @@ export function item(bucket: Bucket, id: string): Item {
   return { name: fallbackName(id), icon: null };
 }
 
+/** The extra Town Center the economy counts. */
+export const TOWN_CENTER: Item = (() => {
+  const hit = ITEMS['building:town-center'];
+  return { name: 'Town Center', icon: hit?.icon ? '/icons/' + hit.icon : null };
+})();
+
 /** An age-up from next_age_cost_source ("landmark:<id>" or "technology:<id>"), or null for the standard cost. */
 export function ageUp(source: string | null | undefined): Item | null {
   const s = String(source || '');

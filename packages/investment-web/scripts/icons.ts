@@ -6,8 +6,8 @@
 //
 // It copies the icon of everything the metric can count (analysis/investment/
 // categories.json: units, production buildings, defenses and their upgrades,
-// walls) and of every age-up (landmarks, and the technologies some civs age up
-// with) into web/public/icons, and writes web/src/icons.generated.ts: for each
+// walls), of every age-up (landmarks, and the technologies some civs age up
+// with) and of the economy's extra Town Centers into web/public/icons, and writes web/src/icons.generated.ts: for each
 // of them, its icon and its name. Icons already copied are kept. Run it again
 // after refresh-game-data moves the pinned commit or categories.json gains ids.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -25,7 +25,7 @@ const FILE: Record<Kind, string> = { unit: 'units/all-optimized.json', building:
 
 interface Raw { id: string; name: string; icon?: string }
 interface GameData { commit: string; items: Record<string, { kind: Kind; baseId: string; ageUp?: true }[]> }
-interface Categories { buckets: Record<string, Partial<Record<Kind, string[]>>>; ageUpLandmarks: Record<string, string[]> }
+interface Categories { buckets: Record<string, Partial<Record<Kind, string[]>>>; ageUpLandmarks: Record<string, string[]>; economy?: { townCenters?: string[] } }
 
 const dataArg = (() => { const i = process.argv.indexOf('--data'); return i > 0 ? process.argv[i + 1] ?? null : null; })();
 
@@ -54,6 +54,7 @@ for (const bucket of Object.values(categories.buckets)) {
 }
 for (const ids of Object.values(categories.ageUpLandmarks)) for (const id of ids) wanted.add(`building:${id}`);
 for (const list of Object.values(gameData.items)) for (const v of list) if (v.ageUp) wanted.add(`${v.kind}:${v.baseId}`);
+for (const id of categories.economy?.townCenters ?? []) wanted.add(`building:${id}`);
 
 const byKind = new Map<Kind, Map<string, Raw>>();
 for (const kind of Object.keys(FILE) as Kind[]) {
