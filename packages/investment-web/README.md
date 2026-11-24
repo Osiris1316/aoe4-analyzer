@@ -22,7 +22,9 @@ The game list's filters live in the address (`?window=feudal&civ=french&r_dark=c
 
 **Pinning** works like following in the league manager: pin one player and this browser remembers them (localStorage only; nothing is stored on the server).
 
-**The age path** works like an opening tree. In any age you can narrow the list to a range of one ratio, by tapping histogram bars or typing the bounds. Later ages then show only the player-games whose earlier rows fall inside every range on the path.
+**Scoping both sides.** Civ and Versus each take several civs (the row's player and their opponent), so "Vikings, Chinese or Ottomans against HRE or Mongols" is one list. Sort can follow either side's ratios or age-up time.
+
+**The age path** works like an opening tree, for both sides. In any age you can narrow the list to a range of one ratio for the player, the opponent, or both (the Player / Opponent switch), by tapping histogram bars or typing the bounds. Later ages then show only the games whose earlier rows fall inside every range on the path. The histogram shows one side's spread with the other side's range in that age applied but not its own, like cross-filtering in a dashboard. In the address: `r_<age>` is the player's range, `o_<age>` the opponent's, `hs=opp` shows the opponent's histogram.
 
 **Icons**: civ flags come from the league manager. Unit, building, technology and landmark icons, and the names shown beside them, come from the [AoE4 World data repo](https://github.com/aoe4world/data) at the commit the metric is pinned to. `scripts/icons.ts` copies the icon of everything the metric can count and of every age-up into `web/public/icons` and writes `web/src/icons.generated.ts`. Run it again from the repo root after `refresh-game-data` moves the commit or `categories.json` gains ids:
 
@@ -52,6 +54,17 @@ scripts/icons.ts        copies icons and names from the aoe4world data repo
 dist/                   the build (not committed)
 ```
 
+## Rows read (D1 free plan)
+
+D1 counts rows scanned, not rows returned, and the free plan's daily allowance covers the whole account. To keep a study session cheap:
+
+- **Stored summary** (`investment_summary`, migration 004): each age's bar scale, the civs and groups for the filters, the game count and the last update. The analysis step writes it (`markUpdated` every run, a full refresh about once a day; `npx tsx scripts/analyze-investment.ts --summary` forces one). The Worker reads it (a few rows, kept for a minute) and falls back to computing any missing piece live, so the page works before the migration too.
+- **One counting pass**: a search runs two statements, the list and one grouped pass that yields the total, the path count and the histogram together.
+- **Civ indexes**: `(metric_version, age_window, civ, opponent_civ)` and `(metric_version, age_window, opponent_civ)`. With civs chosen, the list's sort is written so SQLite seeks these and reads only those matchups; without civs, the age-and-ratio index gives the order and the list stops after its limit.
+- **Measured**: every API response carries `X-D1-Rows-Read` (D1's own count for that request), and the Worker logs `{api, rows_read, queries, ms}` to the Cloudflare logs.
+
+Still reading per person: `/api/players` and `/api/player` read every row of the people they show. A per-player summary table written by the analysis step is the next step if pro backfills make those pages costly.
+
 ## Deploy
 
 From the repo root:
@@ -60,7 +73,7 @@ From the repo root:
 npx wrangler deploy --config packages/investment-web/wrangler.jsonc
 ```
 
-Wrangler builds the app first (`pnpm --filter @aoe4analyzer/investment-web build`: a type check, then Vite), so this one command is still the whole deploy. After pulling changes to this package, run `pnpm install` once.
+Before the first deploy that uses it, apply migration 004 to v2 (`npx tsx scripts/migrate-v2.ts`, then `--apply`) and fill the summary once (`npx tsx scripts/analyze-investment.ts --summary`). Wrangler builds the app first (`pnpm --filter @aoe4analyzer/investment-web build`: a type check, then Vite), so this one command is still the whole deploy. After pulling changes to this package, run `pnpm install` once.
 
 ## Local development
 

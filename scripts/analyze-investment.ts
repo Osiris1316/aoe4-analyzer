@@ -18,6 +18,7 @@
  *   npx tsx scripts/analyze-investment.ts --retry-skipped       # retry skipped and failed games (e.g. after editing maps.json)
  *   npx tsx scripts/analyze-investment.ts --version v1b         # write a new version beside the old one
  *   npx tsx scripts/analyze-investment.ts --local <folder>      # read summaries (.json or .json.gz) from a folder; writes nothing
+ *   npx tsx scripts/analyze-investment.ts --summary             # refresh the pages' stored summary now (needs migration 004; no R2)
  *   add --items to list what was counted in each window, --limit N to cap a run
  *
  * Environment (not needed with --local): CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
@@ -33,6 +34,7 @@ import type { PipelineDb } from '../packages/core/src/db/pipeline-db';
 import { createR2Client, summaryBlobKey, type R2Client } from '../packages/core/src/storage/r2';
 import { argValue, intArg, missingD1Vars, readD1Env, refuseV1 } from '../packages/core/src/harvest/env';
 import { createPlayerSource, isPlayerSourceKind, type TrackedPlayer } from '../packages/core/src/harvest/player-source';
+import { markUpdated, refreshSummary } from '../packages/core/src/investment/summary';
 import {
   analyzeGame,
   loadInvestmentConfig,
@@ -373,6 +375,14 @@ async function main() {
     return;
   }
 
+  // --summary: refresh the stored summary (bar scales, civs, groups, game count) now, and stop.
+  if (has('--summary')) {
+    const r = await refreshSummary(db, version, { force: true });
+    console.log(r.refreshed ? `Summary refreshed for ${version}: ${r.reason}; scales ${JSON.stringify(r.scales)}.` : `Summary not refreshed: ${r.reason}.`);
+    await markUpdated(db, version);
+    return;
+  }
+
   const r2Key = process.env.R2_ACCESS_KEY_ID;
   const r2Secret = process.env.R2_SECRET_ACCESS_KEY;
   if (!r2Key || !r2Secret) {
@@ -443,6 +453,15 @@ async function main() {
     if (showItems) printItems(a);
     if (a.analysed) done++; else skipped++;
     if (!dryRun) await writeGame(db, config, summary, a, groups, a.analysed ? 'done' : 'skipped', a.skipReason);
+  }
+
+  // Keep the pages' stored summary current: the update time on every run that wrote
+  // results, the rest about once a day (it reads the results a few times over, and
+  // the bar scales barely move between runs).
+  if (!dryRun && (done > 0 || skipped > 0)) {
+    await markUpdated(db, version);
+    const r = await refreshSummary(db, version, { maxAgeHours: 20 });
+    console.log(`Page summary: ${r.refreshed ? 'refreshed, ' : 'not refreshed, '}${r.reason}.`);
   }
 
   console.log('\n--- Summary ---');

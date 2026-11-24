@@ -26,7 +26,7 @@ export interface Row {
   [k: `opp_${string}`]: unknown;
 }
 
-export interface Histogram { metric: string; bucketWidth: number; buckets: number; counts: { b: number; n: number }[] }
+export interface Histogram { side?: 'player' | 'opp'; metric: string; bucketWidth: number; buckets: number; counts: { b: number; n: number }[] }
 
 export interface RowsResponse {
   version: string | null; window: Win; rows: Row[]; total: number; inPath: number; scale: number; histogram: Histogram | null;

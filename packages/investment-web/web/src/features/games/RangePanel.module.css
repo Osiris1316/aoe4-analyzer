@@ -4,15 +4,29 @@
   border: 1px solid var(--fg-2); border-radius: 999px; background: var(--surface); color: var(--fg); font-size: var(--text-sm);
 }
 .chip b { font-weight: 600; }
+.chip { gap: 7px; }
 .x { all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: 50%; text-align: center; line-height: 22px; color: var(--muted); }
 
 .range { margin-top: 20px; padding: 14px 14px 12px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); }
 .head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--text-sm); color: var(--muted); }
+/* Player or opponent, in their card colours */
+.sides { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raised); }
+.sides button {
+  all: unset; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 4px;
+  font-size: var(--text-sm); color: var(--muted); cursor: pointer;
+}
+.sides button:focus-visible { outline: 2px solid var(--focus); }
+.sides button[aria-pressed="true"] { background: var(--surface); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line); }
+.set { color: var(--fg-2); font-weight: 700; margin-left: -2px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; flex: 0 0 auto; }
+.dot.player { background: var(--p1); } .dot.opp { background: var(--p2); }
 .head select { height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raised); color: var(--fg); font-size: var(--text-sm); }
 .hist { display: flex; align-items: flex-end; gap: 2px; height: 56px; margin-top: 12px; }
 .hist button { all: unset; flex: 1; height: 100%; display: flex; align-items: flex-end; cursor: pointer; }
 .hist button span { display: block; width: 100%; min-height: 1px; background: var(--line); border-radius: 2px 2px 0 0; }
-.hist button.on span { background: var(--fg-2); }
+.player .hist button.on span { background: var(--p1); }
+.opp .hist button.on span { background: var(--p2); }
+.loading { opacity: 0.4; }
 .hist button:focus-visible span { outline: 2px solid var(--focus); }
 .axis { position: relative; height: 16px; margin-top: 4px; font-family: var(--mono); font-size: var(--text-2xs); color: var(--faint); }
 .axis span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }

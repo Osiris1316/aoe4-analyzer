@@ -6,6 +6,8 @@ import { CivPicker } from '../../kit/CivPicker';
 import type { ListState } from './listState';
 import s from './Filters.module.css';
 
+const SORT_LABELS: [string, string][] = [['combined', 'combined'], ['units', 'units'], ['production', 'production'], ['defense', 'defense'], ['walls', 'walls'], ['ageup', 'age-up time']];
+
 export function AgeTabs({ state, update }: { state: ListState; update: (p: Partial<ListState>) => void }) {
   return (
     <nav className={s.tabs} aria-label="Age">
@@ -29,7 +31,7 @@ export function Filters({ state, update, onePlayer }: { state: ListState; update
     return () => clearTimeout(t);
   }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const timeSort = state.sort === 'ageup' || state.sort === 'date';
+  const timeSort = state.sort === 'ageup' || state.sort === 'opp.ageup' || state.sort === 'date';
   const dirText = state.dir === 'desc' ? (timeSort ? 'Latest first' : 'Highest first') : (timeSort ? 'Earliest first' : 'Lowest first');
   return (
     <section className={s.filters} aria-label="Filters">
@@ -41,18 +43,30 @@ export function Filters({ state, update, onePlayer }: { state: ListState; update
           </select>
         </label>
       )}
+      <label className={s.grow}>Result
+        <select value={state.result} onChange={(e) => update({ result: e.target.value as ListState['result'] })}>
+          <option value="">Any result</option><option value="win">Player won</option><option value="loss">Player lost</option>
+        </select>
+      </label>
       <div className={s.field}>
         <span className={s.lab}>Civ</span>
-        <CivPicker label="Civ" value={state.civ} civs={meta.civs} onChange={(v) => update({ civ: v })} compact />
+        <CivPicker label="Civ" value={state.civ} civs={meta.civs} onChange={(v) => update({ civ: v })} compact multiple />
       </div>
       <div className={s.field}>
         <span className={s.lab}>Versus</span>
-        <CivPicker label="Versus" value={state.vs} civs={meta.civs} onChange={(v) => update({ vs: v })} compact />
+        <CivPicker label="Versus" value={state.vs} civs={meta.civs} onChange={(v) => update({ vs: v })} compact multiple />
       </div>
       <label className={s.grow}>Sort
         <select value={state.sort} onChange={(e) => update({ sort: e.target.value, dir: 'desc' })}>
-          <option value="combined">Combined</option><option value="units">Units</option><option value="production">Production</option>
-          <option value="defense">Defense</option><option value="walls">Walls</option><option value="ageup">Age-up time</option><option value="date">Date played</option>
+          {(['player', 'opp'] as const).map((side) => (
+            <optgroup key={side} label={side === 'opp' ? 'Opponent' : 'Player'}>
+              {SORT_LABELS.map(([k, label]) => {
+                const v = side === 'opp' ? 'opp.' + k : k;
+                return <option key={v} value={v}>{(side === 'opp' ? 'Opponent ' : 'Player ') + label}</option>;
+              })}
+            </optgroup>
+          ))}
+          <option value="date">Date played</option>
         </select>
       </label>
       <button type="button" className={s.dir} aria-label={'Sort direction: ' + dirText} onClick={() => update({ dir: state.dir === 'desc' ? 'asc' : 'desc' })}>{dirText}</button>

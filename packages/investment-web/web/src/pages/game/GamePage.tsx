@@ -7,7 +7,7 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'reac
 import { useJson } from '../../api/client';
 import type { GameResponse } from '../../api/types';
 import { aoe4worldGame, paths } from '../../app/paths';
-import { AgeGrid, GameHead, VodButtons, boardStyles as bs, playersOf } from '../../features/games/Board';
+import { AgeGrid, GameHead, SimilarButton, VodButtons, boardStyles as bs, playersOf } from '../../features/games/Board';
 import { AGE_SHORT, NEXT, WINDOWS, isWin, type Win } from '../../lib/game';
 import { usePin } from '../../lib/pin';
 import { useMedia } from '../../lib/useMedia';
@@ -92,6 +92,7 @@ export function GamePage() {
             <GameHead P={P} level={1} actions={
               <>
                 <VodButtons P={P} />
+                <SimilarButton P={P} />
                 <a className={bs.btn} href={aoe4worldGame(me, gameId)} target="_blank" rel="noopener noreferrer">aoe4world</a>
                 {P.them.id && P.them.w.dark && (
                   <button type="button" className={bs.btn} onClick={() => set({ p: String(P.them.id) })} title={'See the game with ' + P.them.name + ' as the player'}>

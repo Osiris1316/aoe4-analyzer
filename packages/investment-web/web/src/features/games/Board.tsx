@@ -66,6 +66,38 @@ export function GameHead({ P, actions, level = 2 }: { P: Sides; actions?: ReactN
   );
 }
 
+/**
+ * The Games list scoped to games like this one, seen from the player's side:
+ * the same civs on each side, each side's Dark Age military within a quarter of
+ * an age-up of this game's, games the player's side won, opened on the Feudal Age.
+ * From there, take chips off or add civs to widen it.
+ */
+export function similarSearch(P: Sides): string {
+  const q = new URLSearchParams({ window: 'feudal', result: 'win' });
+  if (P.me.civ) q.set('civ', P.me.civ);
+  if (P.them.civ) q.set('vs', P.them.civ);
+  const band = (r: Row | undefined) => {
+    if (!r) return null;
+    const v = Number(r.ratio_combined) || 0;
+    const lo = Math.max(0, Math.floor((v - 0.25) * 20) / 20);
+    const hi = Math.ceil((v + 0.25) * 20) / 20;
+    return 'combined:' + lo + ':' + hi;
+  };
+  const a = band(P.me.w.dark), b = band(P.them.w.dark);
+  if (a) q.set('r_dark', a);
+  if (b) q.set('o_dark', b);
+  return paths.games(q);
+}
+
+export function SimilarButton({ P }: { P: Sides }) {
+  return (
+    <Link className={s.btn} to={similarSearch(P)}
+      title={'Games where ' + P.me.name + "'s civ met " + P.them.name + "'s civ with Dark Age military like this game's, and the player won. Opens on the Feudal Age; widen it from there."}>
+      Find games like this
+    </Link>
+  );
+}
+
 /** The Twitch buttons for whoever streamed the game. */
 export function VodButtons({ P }: { P: Sides }) {
   return (
@@ -133,6 +165,7 @@ export function Board({ gameId, profileId, window, version, pin, only }: {
       <GameHead P={P} actions={
         <>
           <VodButtons P={P} />
+          <SimilarButton P={P} />
           <a className={s.btn} href={aoe4worldGame(profileId, gameId)} target="_blank" rel="noopener noreferrer">aoe4world</a>
           <Link className={s.btn + ' ' + s.primary} to={paths.game(gameId, { p: profileId, window })} title="Open this game on its own page">Open game page</Link>
         </>
