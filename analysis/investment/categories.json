@@ -58,5 +58,9 @@
     "technology": {
       "tower upgrade (excluded)": ["barmkins", "castle-watch", "fairys-protection", "glorious-charge", "yam-network", "yam-network-improved"]
     }
+  },
+  "economy": {
+    "_about": "Hand-kept, not from the Sheet: carry this section over at the next Sheet sync. townCenters: building baseIds counted as an extra Town Center, per age, by the time each one completed. The starting capital-town-center is never counted.",
+    "townCenters": ["town-center"]
   }
 }

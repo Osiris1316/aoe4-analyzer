@@ -110,6 +110,21 @@ async function selectGames(
 
 // ── Writing ────────────────────────────────────────────────────────────
 
+/**
+ * Whether v2 has the economy columns (migration 005). Until it does, rows are
+ * written without them, so code merged before the migration can't break the
+ * scheduled analysis.
+ */
+async function hasEconomyColumns(db: PipelineDb): Promise<boolean> {
+  try {
+    await db.getMany('SELECT tc_built, tc_first_sec FROM investment_results LIMIT 0');
+    return true;
+  } catch (err) {
+    if (/no such column/i.test((err as Error).message)) return false;
+    throw err;
+  }
+}
+
 async function writeGame(
   db: PipelineDb,
   config: InvestmentConfig,
@@ -118,6 +133,7 @@ async function writeGame(
   groups: Map<number, TrackedPlayer>,
   status: 'done' | 'skipped' | 'failed',
   reason: string | null,
+  economy: boolean,
 ) {
   const now = new Date().toISOString();
   const v = config.version;
@@ -127,6 +143,7 @@ async function writeGame(
     const opp = a.players.find((o) => o.profileId !== p.profileId);
     const tracked = groups.get(p.profileId);
     for (const w of p.windows) {
+      const eco = economy ? [w.economy.townCenters, w.economy.firstTownCenterSec] : [];
       await db.run(
         `INSERT INTO investment_results (
           metric_version, game_id, profile_id, age_window, player_name, civ,
@@ -134,8 +151,8 @@ async function writeGame(
           player_group, person, window_start_sec, window_end_sec, reached_next_age, next_age_cost, next_age_cost_source,
           spend_production, spend_units, spend_defense, spend_walls,
           ratio_production, ratio_units, ratio_defense, ratio_combined, ratio_walls,
-          items_json, flags_json, category_fp, overrides_fp, game_data_commit, computed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          items_json, flags_json, category_fp, overrides_fp, game_data_commit, computed_at${economy ? ', tc_built, tc_first_sec' : ''}
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${', ?'.repeat(eco.length)})`,
         [
           v, a.gameId, p.profileId, w.window, p.name, p.civ,
           opp?.profileId ?? null, opp?.name ?? null, opp?.civ ?? null, p.result, a.map, a.mapType, startedAt, Math.round(a.durationSec),
@@ -144,6 +161,7 @@ async function writeGame(
           w.ratio.production, w.ratio.units, w.ratio.defense, w.ratio.combined, w.ratio.walls,
           JSON.stringify(w.items), w.flags.length ? JSON.stringify(w.flags) : null,
           config.fingerprints.categories, config.fingerprints.overrides, config.gameDataCommit, now,
+          ...eco,
         ],
       );
     }
@@ -175,7 +193,8 @@ function printGame(a: GameAnalysis) {
     const parts = p.windows.map((w) => {
       const until = w.reached ? `aged ${mmss(w.end)}` : 'did not age up';
       const flag = w.flags.length ? ` [${w.flags.join(', ')}]` : '';
-      return `${w.window} ${w.ratio.combined.toFixed(2)} (prod ${w.ratio.production.toFixed(2)}, units ${w.ratio.units.toFixed(2)}, def ${w.ratio.defense.toFixed(2)}, walls ${w.ratio.walls.toFixed(2)}; ${until}, ÷${w.divisor} ${w.divisorSource})${flag}`;
+      const tc = w.economy.townCenters ? `; +${w.economy.townCenters} TC, first ${mmss(w.economy.firstTownCenterSec ?? 0)}` : '';
+      return `${w.window} ${w.ratio.combined.toFixed(2)} (prod ${w.ratio.production.toFixed(2)}, units ${w.ratio.units.toFixed(2)}, def ${w.ratio.defense.toFixed(2)}, walls ${w.ratio.walls.toFixed(2)}; ${until}, ÷${w.divisor} ${w.divisorSource}${tc})${flag}`;
     });
     console.log(`    ${p.name} (${p.civ}): ${parts.join(' | ')}`);
   }
@@ -315,6 +334,38 @@ function printReport(all: { a: GameAnalysis }[]) {
   }
   line(`types: ${Object.entries(types).map(([k, n]) => `${k} ${n}`).join(', ')}`);
   line(`arrays: ${Object.entries(arrs).map(([k, n]) => `${k} ${n}`).join(', ')}`);
+
+  console.log('\n8. Extra Town Centers (economy), counted in the window they completed in');
+  const tcs = all.flatMap(({ a }) => a.diagnostics.townCenters.map((t) => ({ ...t, gameId: a.gameId, n: 1 })));
+  if (tcs.length === 0) line('none seen');
+  else {
+    line(`by civ and window: ${agg2(tcs, (t) => `${t.civ} ${t.window ?? 'after castle'}`)}`);
+    line(`by entry: ${agg2(tcs, (t) => `${t.id} from ${t.icon}${t.via === 'name' ? ' (matched by name)' : ''}`)}`);
+    // Extra TCs completed by the end of each player's Feudal window, per analysed player-game.
+    const spread = new Map<number, number>();
+    for (const { a } of all) {
+      for (const p of a.players) {
+        const n = p.windows.filter((w) => w.window !== 'castle').reduce((s, w) => s + w.economy.townCenters, 0);
+        spread.set(n, (spread.get(n) ?? 0) + 1);
+      }
+    }
+    line(`player-games by extra TCs before Castle: ${[...spread].sort((x, y) => x[0] - y[0]).map(([n, c]) => `${n}: ${c}`).join(', ')}`);
+    const firsts = new Map<string, number[]>();
+    for (const { a } of all) for (const p of a.players) for (const w of p.windows) {
+      if (w.economy.firstTownCenterSec !== null) firsts.set(`${p.civ} ${w.window}`, [...(firsts.get(`${p.civ} ${w.window}`) ?? []), w.economy.firstTownCenterSec]);
+    }
+    const med = (xs: number[]) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)] ?? 0;
+    line(`first extra TC, median time: ${[...firsts].sort().map(([k, xs]) => `${k} ${mmss(med(xs))} (${xs.length})`).join(', ')}`);
+    // Worth a look: a TC done before Feudal (Andrei: a second TC is never Dark),
+    // and two or more in one window for civs that can pack buildings (a moved TC may log as a new one).
+    const dark = tcs.filter((t) => t.window === 'dark');
+    line(`completed in the Dark Age window (check: should not happen): ${dark.map((t) => `${t.gameId} ${t.player} ${t.civ} ${mmss(t.sec)}`).join('; ') || 'none'}`);
+    const PACKERS = new Set(['mongols', 'golden_horde']);
+    const multi = new Map<string, number[]>();
+    for (const t of tcs) if (t.window && PACKERS.has(t.civ)) multi.set(`${t.gameId} ${t.player} ${t.civ} ${t.window}`, [...(multi.get(`${t.gameId} ${t.player} ${t.civ} ${t.window}`) ?? []), t.sec]);
+    const multiList = [...multi].filter(([, xs]) => xs.length > 1);
+    line(`Mongols and Golden Horde with 2+ in one window (check for a packed and moved TC): ${multiList.map(([k, xs]) => `${k} at ${xs.sort((x, y) => x - y).map(mmss).join(', ')}`).join('; ') || 'none'}`);
+  }
 }
 
 // ── Main ───────────────────────────────────────────────────────────────
@@ -416,6 +467,8 @@ async function main() {
     gameIds = await selectGames(db, version, mode, limit);
     console.log(`Selected ${gameIds.length} game(s) (${mode}, limit ${limit}).`);
   }
+  const economy = dryRun ? false : await hasEconomyColumns(db);
+  if (!dryRun && !economy) console.log('Economy columns missing (migration 005 not applied): rows are written without Town Center counts.');
   console.log(dryRun ? 'Dry run: nothing is written.\n' : '');
 
   const all: { a: GameAnalysis }[] = [];
@@ -452,7 +505,7 @@ async function main() {
     printGame(a);
     if (showItems) printItems(a);
     if (a.analysed) done++; else skipped++;
-    if (!dryRun) await writeGame(db, config, summary, a, groups, a.analysed ? 'done' : 'skipped', a.skipReason);
+    if (!dryRun) await writeGame(db, config, summary, a, groups, a.analysed ? 'done' : 'skipped', a.skipReason, economy);
   }
 
   // Keep the pages' stored summary current: the update time on every run that wrote

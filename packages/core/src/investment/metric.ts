@@ -26,6 +26,11 @@
  * only one (Jin iron pagodas, rams, some horsemen), so when the ID is missing
  * the entry is matched by its icon name within the civ instead, and the
  * report lists every such match. Age-ups use ID matches only.
+ *
+ * Economy, apart from all of the above: each window also counts the extra
+ * Town Centers completed in it (categories.json, economy.townCenters), by
+ * completion time rather than the payment estimate, and when the first one
+ * completed. These never enter the spend or the ratios.
  */
 
 import { createHash } from 'node:crypto';
@@ -66,6 +71,8 @@ interface CategoriesFile {
   buckets: Record<Bucket, Partial<Record<Kind, string[]>>>;
   ageUpLandmarks: Record<AgeWindow, string[]>;
   excluded: Partial<Record<Kind, Record<string, string[]>>>;
+  /** Hand-kept, not from the Sheet: what the economy measures count. */
+  economy?: { townCenters?: string[] };
 }
 interface OverridesFile {
   freeUnitPrices: Record<string, number>;
@@ -108,6 +115,8 @@ export interface InvestmentConfig {
   nameAliases: Record<string, string>;
   countUnlabelledArrays: Record<string, string[]>;
   discounts: Discount[];
+  /** Building baseIds that count as an extra Town Center (the starting one, capital-town-center, never does). */
+  townCenters: Set<string>;
   /** Civ tags that end some icon names (`_sco`, `_mon`, ...), stripped before matching by name. */
   civSuffixes: Set<string>;
   counterpart: Map<string, Variation[]>; // `${kind}:${baseId}` -> all variations
@@ -171,6 +180,7 @@ export function loadInvestmentConfig(dir: string, version = METRIC_VERSION): Inv
     nameAliases: ov.nameAliases ?? {},
     countUnlabelledArrays: ov.countUnlabelledArrays ?? {},
     discounts: ov.discounts ?? [],
+    townCenters: new Set(cat.economy?.townCenters ?? []),
     civSuffixes: new Set([...Object.values(gd.civs), ...ICON_CIV_TAGS]),
     counterpart,
     mapTypeOf,
@@ -230,6 +240,14 @@ export interface WindowResult {
   ratio: Record<Bucket | 'combined', number>;
   items: CountedItem[];
   flags: string[];
+  /**
+   * Economy, kept apart from the military spend and ratios.
+   * townCenters: extra Town Centers completed in this window, by completion
+   * time (not the payment estimate: many villagers usually build a TC, so
+   * completion minus the listed build time lands a minute or more early).
+   * firstTownCenterSec: when the first of them completed, null if none.
+   */
+  economy: { townCenters: number; firstTownCenterSec: number | null };
 }
 export interface PlayerResult {
   profileId: number;
@@ -257,6 +275,8 @@ export interface Diagnostics {
   movedToAvailableAge: { civ: string; id: string; from: AgeWindow; to: AgeWindow; n: number }[];
   /** Finished before the age the data says this civ needs for it: kept where it finished, worth checking. */
   earlierThanData: { civ: string; id: string; window: AgeWindow; n: number }[];
+  /** Every extra Town Center completed, with the window it counted in (null = after the castle window). */
+  townCenters: { player: string; civ: string; id: string; icon: string; via: 'pbgid' | 'name'; sec: number; window: AgeWindow | null }[];
 }
 export interface GameAnalysis {
   gameId: number;
@@ -409,7 +429,7 @@ export function analyzeGame(summary: Summary, config: InvestmentConfig): GameAna
   const diag: Diagnostics = {
     unknownPbgids: [], matchedByName: [], uncategorized: [], freeUnits: [], unitsWithoutFinished: [], cancelledPlacements: [],
     destroyedAfterBuild: [], bundles: [], ageUps: [], goldenHordeCarts: [], entryTypes: {}, timestampArrays: {},
-    movedToAvailableAge: [], earlierThanData: [],
+    movedToAvailableAge: [], earlierThanData: [], townCenters: [],
   };
   const base: GameAnalysis = {
     gameId: summary.gameId, map, mapType, mapListed: listedType !== undefined, analysed: false,
@@ -491,8 +511,22 @@ function analyzePlayer(p: SummaryPlayer, config: InvestmentConfig, durationSec: 
     windows.push({
       window: w.window, start, end: next ?? end, reached: next !== undefined, divisor: d.cost, divisorSource: d.source,
       spend: { production: 0, units: 0, defense: 0, walls: 0 }, ratio: { production: 0, units: 0, defense: 0, walls: 0, combined: 0 },
-      items: [], flags,
+      items: [], flags, economy: { townCenters: 0, firstTownCenterSec: null },
     });
+  }
+
+  // ── Extra Town Centers, in the window each one completed in ─────
+  for (const { e, v, via } of resolved) {
+    if (!v || !via || v.kind !== 'building' || !config.townCenters.has(v.baseId)) continue;
+    for (const done of nums(e.constructed)) {
+      if (done <= 0) continue; // existed at minute zero
+      const win = windows.find((w) => done >= w.start && (done < w.end || (!w.reached && done <= w.end))) ?? null;
+      diag.townCenters.push({ player: p.name, civ: p.civilization, id: v.baseId, icon: icon(e), via, sec: Math.round(done), window: win?.window ?? null });
+      if (!win) continue; // Imperial, or beyond game end
+      win.economy.townCenters++;
+      const first = win.economy.firstTownCenterSec;
+      if (first === null || done < first) win.economy.firstTownCenterSec = Math.round(done);
+    }
   }
 
   // ── Charge every counted item to its window ─────────────────────

@@ -11,6 +11,10 @@ For each player and age window (dark, feudal, castle), the analysis adds up what
 | `overrides.json` | Prices for free units that have no paid counterpart, and the default age-up costs. | Edit by hand. |
 | `maps.json` | Map types. Only land maps are analysed, and a map that isn't listed counts as land and gets flagged. | Edit by hand. |
 
+## Economy: extra Town Centers
+
+Each row also counts the extra Town Centers the player completed in that age (`tc_built`) and when the first one completed (`tc_first_sec`). The starting Town Center never counts. They are counted at completion, not at the payment estimate the military spend uses, because many villagers usually build a TC and the estimate lands a minute or more early. They never enter the spend or the ratios. Which buildings count is the hand-kept `economy.townCenters` list at the end of `categories.json`; carry it over when the file is next synced from the Sheet. Rows written before migration 005 have NULL there, meaning not measured; `--rerun` fills them. The report's section 8 lists anything worth checking.
+
 Every result row records the metric version, the fingerprints of these files and the data commit. After a change, `--rerun` replaces the current version's rows, or `--version v1b` writes a new set beside the old one.
 
 ## Commands
