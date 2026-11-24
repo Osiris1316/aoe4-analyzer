@@ -1,5 +1,5 @@
 // The game list's state lives in the address
-// (?window=feudal&civ=vikings&vs=holy_roman_empire,mongols&r_dark=combined:0:0.5&o_dark=combined:1:),
+// (?window=feudal&civ=vikings&vs=holy_roman_empire,mongols&r_dark=combined:0:0.5&o_dark=combined:1:&t_feudal=1),
 // so a link opens with the same filters and the back button walks real pages.
 import { useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
@@ -18,6 +18,10 @@ export type Side = 'player' | 'opp';
 /** A range on one ratio of one age: ratios as decimals, hi exclusive, null hi = open. */
 export interface Range { metric: Metric; lo: number; hi: number | null }
 export type Ranges = Record<Win, Range | null>;
+
+/** Extra Town Centers finished in an age: 0 = none, 1 = one or more, 2 = two or more; null = any. */
+export type Tc = 0 | 1 | 2;
+export type Tcs = Record<Win, Tc | null>;
 
 export interface ListState {
   window: Win;
@@ -42,6 +46,9 @@ export interface ListState {
   /** Ranges per age: the player's (r_<age>) and the opponent's (o_<age>). */
   ranges: Ranges;
   oranges: Ranges;
+  /** Extra Town Centers per age: the player's (t_<age>) and the opponent's (ot_<age>). */
+  tcs: Tcs;
+  otcs: Tcs;
 }
 
 const DEFAULTS = {
@@ -59,6 +66,15 @@ function readRanges(sp: URLSearchParams, prefix: string): Ranges {
     const lo = Number(loS || 0);
     const hi = hiS === undefined || hiS === '' ? null : Number(hiS);
     if (isMetric(metric) && Number.isFinite(lo) && (hi === null || Number.isFinite(hi))) out[w] = { metric, lo, hi };
+  }
+  return out;
+}
+
+function readTcs(sp: URLSearchParams, prefix: string): Tcs {
+  const out: Tcs = { dark: null, feudal: null, castle: null };
+  for (const w of WINDOWS) {
+    const raw = sp.get(prefix + w);
+    if (raw === '0' || raw === '1' || raw === '2') out[w] = Number(raw) as Tc;
   }
   return out;
 }
@@ -82,12 +98,16 @@ export function readList(sp: URLSearchParams): ListState {
     version: sp.get('version') || '',
     ranges: readRanges(sp, 'r_'),
     oranges: readRanges(sp, 'o_'),
+    tcs: readTcs(sp, 't_'),
+    otcs: readTcs(sp, 'ot_'),
   };
 }
 
 export const rangeParam = (r: Range): string => r.metric + ':' + r.lo + ':' + (r.hi === null ? '' : r.hi);
 export const rangesOf = (s: ListState, side: Side): Ranges => (side === 'opp' ? s.oranges : s.ranges);
 export const rangeKey = (side: Side): 'ranges' | 'oranges' => (side === 'opp' ? 'oranges' : 'ranges');
+export const tcsOf = (s: ListState, side: Side): Tcs => (side === 'opp' ? s.otcs : s.tcs);
+export const tcKey = (side: Side): 'tcs' | 'otcs' => (side === 'opp' ? 'otcs' : 'tcs');
 
 /** Only what differs from the defaults goes into the address. */
 export function writeList(s: ListState): URLSearchParams {
@@ -102,6 +122,8 @@ export function writeList(s: ListState): URLSearchParams {
   for (const w of WINDOWS) {
     const r = s.ranges[w]; if (r) p.set('r_' + w, rangeParam(r));
     const o = s.oranges[w]; if (o) p.set('o_' + w, rangeParam(o));
+    const t = s.tcs[w]; if (t !== null) p.set('t_' + w, String(t));
+    const ot = s.otcs[w]; if (ot !== null) p.set('ot_' + w, String(ot));
   }
   return p;
 }
@@ -122,6 +144,8 @@ export function rowsQuery(s: ListState, players: number[] | null): string {
   for (const w of WINDOWS) {
     const r = s.ranges[w]; if (r) p.set('range_' + w, rangeParam(r));
     const o = s.oranges[w]; if (o) p.set('opprange_' + w, rangeParam(o));
+    const t = s.tcs[w]; if (t !== null) p.set('tc_' + w, String(t));
+    const ot = s.otcs[w]; if (ot !== null) p.set('opptc_' + w, String(ot));
   }
   return '/api/rows?' + p.toString();
 }

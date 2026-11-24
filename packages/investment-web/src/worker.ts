@@ -14,6 +14,10 @@
  *     &opprange_dark=...              the same for their opponent — the age path:
  *        a range on an earlier window keeps only games where that side's earlier row is in it;
  *        a range on this window filters the list. ratio: combined|production|units|defense|walls
+ *     &tc_dark=<n>  (and tc_feudal, tc_castle) extra Town Centers the row's player completed in that age:
+ *        0 = none, 1 = one or more, 2 = two or more; &opptc_<window>= the same for the opponent.
+ *        Like the ranges, earlier ages form the path and this age filters; later ages are ignored.
+ *        Rows analysed before migration 005 have no count and never match.
  *     &hs=player|opp  whose spread the histogram shows; &hm=<ratio> which ratio, when that side has no range
  *     &result=win|loss  only games the row's player won (or lost)
  *     &player=<id>[,<id>]  only these accounts (a person's alts, or the pinned player)
@@ -218,6 +222,24 @@ function parseRange(p: URLSearchParams, window: string, side: Side): Range | nul
   return { window, side, metric, lo, hi };
 }
 
+/**
+ * tc_<window>=<n> for the row's player, opptc_<window>= for their opponent:
+ * extra Town Centers completed in that age, 0 = none, 1 = one or more, 2 = two or more.
+ */
+function tcSql(p: URLSearchParams, window: string, side: Side, current: string): { sql: string; binds: unknown[] } | null {
+  const raw = p.get(`${side === 'opp' ? 'opptc' : 'tc'}_${window}`);
+  if (raw === null || !/^[0-2]$/.test(raw)) return null;
+  const n = Number(raw);
+  const cond = (t: string) => (n === 0 ? `${t}.tc_built = 0` : `${t}.tc_built >= ${n}`);
+  if (side === 'player' && window === current) return { sql: cond('r'), binds: [] };
+  const who = side === 'opp' ? 'r.opponent_profile_id' : 'r.profile_id';
+  return {
+    sql: `EXISTS (SELECT 1 FROM investment_results e WHERE e.metric_version = r.metric_version
+      AND e.game_id = r.game_id AND e.profile_id = ${who} AND e.age_window = ? AND ${cond('e')})`,
+    binds: [window],
+  };
+}
+
 /** A comma list of civ ids (at most 30). */
 function civList(v: string | null): string[] {
   return (v || '').split(',').map((c) => c.trim()).filter((c) => /^[a-z_]{2,40}$/.test(c)).slice(0, 30);
@@ -297,6 +319,15 @@ async function rows(db: D1Database, url: URL): Promise<Response> {
       where.push(r.sql); binds.push(...r.binds);
     }
   }
+  // Extra Town Centers, either side, in earlier ages and this one: part of the scope,
+  // like the civs, so the path count and the histogram follow them too.
+  for (const w of ['dark', 'feudal', 'castle']) {
+    if ((ORDER[w] ?? 0) > (ORDER[window] ?? 0)) break;
+    for (const side of ['player', 'opp'] as const) {
+      const t = tcSql(p, w, side, window);
+      if (t) { where.push(t.sql); binds.push(...t.binds); }
+    }
+  }
   const baseWhere = where.join(' AND ');
   const baseBinds = [...binds];
 
@@ -335,13 +366,13 @@ async function rows(db: D1Database, url: URL): Promise<Response> {
       r.window_start_sec, r.window_end_sec, r.reached_next_age, r.next_age_cost, r.next_age_cost_source,
       r.spend_production, r.spend_units, r.spend_defense, r.spend_walls,
       r.ratio_production, r.ratio_units, r.ratio_defense, r.ratio_combined, r.ratio_walls,
-      r.items_json, r.flags_json,
+      r.items_json, r.flags_json, r.tc_built, r.tc_first_sec,
       o.player_group AS opp_group, o.person AS opp_person, o.window_start_sec AS opp_window_start_sec, o.window_end_sec AS opp_window_end_sec,
       o.reached_next_age AS opp_reached_next_age, o.next_age_cost AS opp_next_age_cost, o.next_age_cost_source AS opp_next_age_cost_source,
       o.spend_production AS opp_spend_production, o.spend_units AS opp_spend_units, o.spend_defense AS opp_spend_defense, o.spend_walls AS opp_spend_walls,
       o.ratio_production AS opp_ratio_production, o.ratio_units AS opp_ratio_units, o.ratio_defense AS opp_ratio_defense,
       o.ratio_combined AS opp_ratio_combined, o.ratio_walls AS opp_ratio_walls,
-      o.items_json AS opp_items_json, o.flags_json AS opp_flags_json,
+      o.items_json AS opp_items_json, o.flags_json AS opp_flags_json, o.tc_built AS opp_tc_built, o.tc_first_sec AS opp_tc_first_sec,
       CASE WHEN g.p0_profile_id = r.profile_id THEN g.p0_twitch_vod_url ELSE g.p1_twitch_vod_url END AS vod_url,
       CASE WHEN g.p0_profile_id = r.profile_id THEN g.p1_twitch_vod_url ELSE g.p0_twitch_vod_url END AS opp_vod_url
     FROM investment_results r
@@ -392,7 +423,7 @@ async function game(db: D1Database, url: URL): Promise<Response> {
       opponent_profile_id, opponent_name, opponent_civ, result, map, map_type, started_at, duration_sec,
       window_start_sec, window_end_sec, reached_next_age, next_age_cost, next_age_cost_source,
       spend_production, spend_units, spend_defense, spend_walls,
-      ratio_production, ratio_units, ratio_defense, ratio_combined, ratio_walls, items_json, flags_json
+      ratio_production, ratio_units, ratio_defense, ratio_combined, ratio_walls, items_json, flags_json, tc_built, tc_first_sec
     FROM investment_results WHERE metric_version = ? AND game_id = ?
     ORDER BY profile_id, CASE age_window WHEN 'dark' THEN 1 WHEN 'feudal' THEN 2 ELSE 3 END`).bind(version, id).all();
   // Each player's Twitch VOD, by profile id, when aoe4world had one.

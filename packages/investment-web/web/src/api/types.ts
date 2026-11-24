@@ -20,6 +20,8 @@ export interface Row {
   spend_production: number; spend_units: number; spend_defense: number; spend_walls: number;
   ratio_production: number; ratio_units: number; ratio_defense: number; ratio_combined: number; ratio_walls: number;
   items_json: string | null; flags_json: string | null;
+  /** Extra Town Centers completed in this age and when the first did; null before migration 005's rerun. */
+  tc_built?: number | null; tc_first_sec?: number | null;
   opp_group?: string | null; opp_person?: string | null;
   /** This player's and the opponent's Twitch VOD at the game's start (list rows only). */
   vod_url?: string | null; opp_vod_url?: string | null;

@@ -25,7 +25,10 @@
 .prow { display: grid; grid-template-columns: var(--col-ratio) var(--col-name) minmax(0, 1fr) var(--col-time); column-gap: 10px; align-items: center; min-height: 20px; }
 .ratio { font-family: var(--mono); font-size: var(--text-md); font-weight: 600; text-align: right; white-space: nowrap; color: var(--fg); }
 .p2 .ratio { color: var(--fg-2); }
-.pname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-md); }
+.pname { min-width: 0; display: flex; align-items: center; gap: 5px; font-size: var(--text-md); }
+.pnameText { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The extra Town Center mark sits at the column's right edge, so it lines up down the list */
+.pname > :last-child:not(.pnameText) { margin-left: auto; }
 .p1 .pname { color: var(--p1); font-weight: 600; }
 .p2 .pname { color: var(--p2); font-weight: 500; }
 .time { font-family: var(--mono); font-size: var(--text-sm); color: var(--muted); text-align: right; white-space: nowrap; }

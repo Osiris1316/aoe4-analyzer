@@ -39,3 +39,6 @@
 .inputs button { height: 30px; padding: 0 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: transparent; color: var(--fg-2); font-size: var(--text-sm); }
 .inputs .apply { background: var(--primary-bg); border-color: var(--primary-bg); color: var(--primary-fg); }
 .msg { margin: 8px 0 0; font-size: var(--text-sm); color: var(--warn); }
+/* Extra Town Centers for the chosen side, under the range */
+.tcRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line-soft); font-size: var(--text-sm); color: var(--muted); }
+.tcRow .sides button { padding: 0 11px; }
